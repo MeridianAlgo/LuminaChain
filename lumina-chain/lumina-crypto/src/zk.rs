@@ -12,6 +12,7 @@ use rand::thread_rng;
 const MAX_RESERVES: usize = 100;
 const RANGE_BITS: usize = 64;
 const BULLETPROOF_DOMAIN: &[u8] = b"lumina-confidential-transfer-v1";
+const INSURANCE_BULLETPROOF_DOMAIN: &[u8] = b"lumina-insurance-claim-v1";
 
 fn alloc_u64_bits(
     cs: ConstraintSystemRef<Fr>,
@@ -262,8 +263,53 @@ pub fn verify_multi_jurisdictional_proof(jurisdiction_id: u32, proof: &[u8]) -> 
     verify_bound_context_hash(&blake3::hash(&jurisdiction_id.to_le_bytes()).into(), proof)
 }
 
+/// Build a ZK insurance claim proof envelope.
+///
+/// Encoding: `blinding[32] || range_proof_bytes`.
+pub fn create_insurance_loss_proof(claimed_amount: u64, blinding: [u8; 32]) -> Vec<u8> {
+    let blinding_scalar = Scalar::from_bytes_mod_order(blinding);
+    let bp_gens = BulletproofGens::new(RANGE_BITS, 1);
+    let pc_gens = PedersenGens::default();
+    let mut transcript = Transcript::new(INSURANCE_BULLETPROOF_DOMAIN);
+
+    let (proof, _) = RangeProof::prove_single(
+        &bp_gens,
+        &pc_gens,
+        &mut transcript,
+        claimed_amount,
+        &blinding_scalar,
+        RANGE_BITS,
+    )
+    .expect("insurance bulletproof generation");
+
+    let mut out = Vec::with_capacity(32 + proof.to_bytes().len());
+    out.extend_from_slice(&blinding);
+    out.extend_from_slice(&proof.to_bytes());
+    out
+}
+
 pub fn verify_insurance_loss_proof(proof: &[u8], claimed_amount: u64) -> bool {
-    verify_bound_context_hash(&blake3::hash(&claimed_amount.to_le_bytes()).into(), proof)
+    if proof.len() <= 32 {
+        return false;
+    }
+
+    let mut blinding = [0u8; 32];
+    blinding.copy_from_slice(&proof[..32]);
+
+    let range_proof = match RangeProof::from_bytes(&proof[32..]) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let blinding_scalar = Scalar::from_bytes_mod_order(blinding);
+    let bp_gens = BulletproofGens::new(RANGE_BITS, 1);
+    let pc_gens = PedersenGens::default();
+    let commitment = pc_gens.commit(Scalar::from(claimed_amount), blinding_scalar);
+    let mut transcript = Transcript::new(INSURANCE_BULLETPROOF_DOMAIN);
+
+    range_proof
+        .verify_single(&bp_gens, &pc_gens, &mut transcript, &commitment, RANGE_BITS)
+        .is_ok()
 }
 
 pub fn verify_credit_score_proof(proof: &[u8]) -> bool {
@@ -312,6 +358,13 @@ mod tests {
         let mut tampered = proof.clone();
         tampered[0] ^= 0xAA;
         assert!(!verify_confidential_transfer(&commitment, &tampered));
+    }
+
+    #[test]
+    fn insurance_claim_bulletproof_verifies() {
+        let proof = create_insurance_loss_proof(1_234, [3u8; 32]);
+        assert!(verify_insurance_loss_proof(&proof, 1_234));
+        assert!(!verify_insurance_loss_proof(&proof, 1_235));
     }
 
     #[test]

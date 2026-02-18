@@ -3,6 +3,10 @@ name = "lumina-crypto"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+pq-crypto = ["dep:pqcrypto-dilithium", "dep:pqcrypto-kyber", "dep:pqcrypto-traits"]
+
 [dependencies]
 ed25519-dalek = { workspace = true, features = ["rand_core"] }
 blake3 = { workspace = true }
@@ -12,6 +16,7 @@ ark-groth16 = { workspace = true }
 ark-bls12-381 = { workspace = true }
 ark-std = { workspace = true }
 ark-ff = { workspace = true }
+ark-ec = { workspace = true }
 ark-snark = "0.4"
 ark-serialize = "0.4"
 ark-relations = "0.4"
@@ -20,3 +25,7 @@ thiserror = { workspace = true }
 bulletproofs = { workspace = true }
 curve25519-dalek = { workspace = true }
 merlin = { workspace = true }
+threshold_crypto = { workspace = true }
+pqcrypto-dilithium = { workspace = true, optional = true }
+pqcrypto-kyber = { workspace = true, optional = true }
+pqcrypto-traits = { workspace = true, optional = true }

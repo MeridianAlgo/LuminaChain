@@ -207,15 +207,16 @@ fn test_yield_token_wrap_unwrap() {
     {
         let mut ctx = ExecutionContext {
             state: &mut state,
-            height: 250,
+            height: 3_153_800,
             timestamp: 2500,
         };
         let si = StablecoinInstruction::UnwrapYieldToken { token_id: 0 };
         assert!(execute_si(&si, &sender, &mut ctx).is_ok());
     }
 
-    // Should have principal back plus some yield
-    assert!(state.accounts.get(&sender).unwrap().lusd_balance >= 10000);
+    // Should have principal back plus net yield, and insurance pool should receive junior-yield cut.
+    assert!(state.accounts.get(&sender).unwrap().lusd_balance > 10000);
+    assert!(state.insurance_fund_balance > 0);
     assert_eq!(
         state.accounts.get(&sender).unwrap().yield_positions.len(),
         0
