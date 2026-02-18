@@ -15,7 +15,6 @@ pub fn sign(key: &SigningKey, message: &[u8]) -> Vec<u8> {
 pub fn verify_signature(pubkey_bytes: &[u8; 32], message: &[u8], signature_bytes: &[u8]) -> Result<()> {
     let pubkey = VerifyingKey::from_bytes(pubkey_bytes).map_err(|_| anyhow::anyhow!("Invalid public key"))?;
     
-    // Check signature length
     if signature_bytes.len() != 64 {
         bail!("Invalid signature length");
     }

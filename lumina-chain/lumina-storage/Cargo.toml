@@ -9,3 +9,4 @@ serde = { workspace = true }
 rocksdb = { workspace = true }
 anyhow = { workspace = true }
 bincode = { workspace = true }
+hex = "0.4"

@@ -8,6 +8,8 @@ use lumina_storage::db::Storage;
 use tokio::sync::{mpsc, RwLock};
 use std::sync::Arc;
 use tracing::{info, error};
+use blake3;
+use bincode;
 
 pub struct ConsensusService {
     state: Arc<RwLock<GlobalState>>,
@@ -37,12 +39,22 @@ impl ConsensusService {
         info!("Starting Consensus Service (Mocked Malachite Loop)...");
         
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-        let mut height = 1;
-        let mut prev_hash = [0u8; 32];
+        let mut current_height = 0;
+        let mut last_block_hash = [0u8; 32];
 
-        // Try to recover current height from storage
-        // This is Phase 2 recovery logic
-        // ... omitted for brevity
+        // Load highest block from storage for recovery
+        if let Ok(Some(last_stored_state)) = self.storage.load_state() {
+            // This is simplified. In a real system, we'd iterate blocks to find the highest.
+            // For now, we assume state reflects highest committed.
+            let highest_block_height = last_stored_state.last_rebalance_height; // Using last_rebalance_height as a proxy
+            if highest_block_height > 0 {
+                if let Ok(Some(last_block)) = self.storage.load_block_by_height(highest_block_height) {
+                    current_height = last_block.header.height;
+                    last_block_hash = last_block.hash();
+                    info!("Recovered from storage. Starting at height {}", current_height);
+                }
+            }
+        }
 
         loop {
             tokio::select! {
@@ -50,22 +62,20 @@ impl ConsensusService {
                     self.mempool.push(tx);
                 }
                 _ = interval.tick() => {
-                    // Propose Block
                     if self.mempool.is_empty() {
                         continue;
                     }
 
                     let txs: Vec<Transaction> = self.mempool.drain(..).collect();
-                    info!("Consensus: Proposing block {} with {} txs", height, txs.len());
+                    info!("Consensus: Proposing block {} with {} txs", current_height + 1, txs.len());
 
                     let mut state_guard = self.state.write().await;
                     let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
 
-                    // Execute Transactions
                     let mut valid_txs = Vec::new();
                     let mut ctx = ExecutionContext {
                         state: &mut state_guard,
-                        height,
+                        height: current_height + 1,
                         timestamp,
                     };
 
@@ -82,13 +92,16 @@ impl ConsensusService {
                         continue;
                     }
 
-                    // Create Block
-                    let block = Block {
+                    // Mock Merkle root calculations
+                    let transactions_root = blake3::hash(&bincode::serialize(&valid_txs).unwrap()).into();
+                    let state_root = blake3::hash(&bincode::serialize(&*state_guard).unwrap()).into();
+
+                    let new_block = Block {
                         header: BlockHeader {
-                            height,
-                            prev_hash,
-                            transactions_root: [0u8; 32],
-                            state_root: [0u8; 32],
+                            height: current_height + 1,
+                            prev_hash: last_block_hash,
+                            transactions_root,
+                            state_root,
                             timestamp,
                             proposer: [0u8; 32],
                         },
@@ -96,22 +109,19 @@ impl ConsensusService {
                         votes: Vec::new(),
                     };
                     
-                    prev_hash = block.hash();
-                    
-                    // Broadcast
-                    let block_bytes = bincode::serialize(&block).unwrap();
-                    let _ = self.network_tx.send(NetworkCommand::BroadcastBlock(block_bytes)).await;
+                    last_block_hash = new_block.hash();
+                    current_height += 1;
+                    state_guard.last_rebalance_height = current_height; // Update for state recovery
 
-                    // PERSISTENCE (Phase 2 hardening)
-                    if let Err(e) = self.storage.save_block(&block) {
+                    // Persist block and state
+                    if let Err(e) = self.storage.save_block(&new_block) {
                         error!("Failed to save block: {}", e);
                     }
                     if let Err(e) = self.storage.save_state(&state_guard) {
                         error!("Failed to save state: {}", e);
                     }
 
-                    info!("Consensus: Committed block {} with {} valid txs. Total LUSD Supply: {}", height, block.transactions.len(), state_guard.total_lusd_supply);
-                    height += 1;
+                    info!("Consensus: Committed block {} with {} valid txs. Total LUSD Supply: {}", current_height, new_block.transactions.len(), state_guard.total_lusd_supply);
                 }
             }
         }
