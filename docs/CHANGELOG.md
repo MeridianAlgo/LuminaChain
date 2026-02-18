@@ -230,9 +230,19 @@ For users upgrading from version 1.x to 2.x:
 ## Known Issues
 
 ### Version 2.1.0
-- **Issue #123**: Memory leak under high load (fix in progress)
-- **Issue #124**: Network connectivity issues in certain configurations
-- **Issue #125**: API rate limiting too aggressive for some use cases
+
+| Issue | Title | New Labels | Detail |
+|-------|-------|------------|--------|
+| #123 | Memory leak under high load | `type:bug`, `area:runtime`, `priority:high`, `status:investigating` | Reproduced during sustained high-TPS workloads where memory growth does not stabilize after garbage collection cycles. Mitigation is node restarts in long-running environments until a patch is released. |
+| #124 | Network connectivity issues in certain configurations | `type:bug`, `area:networking`, `priority:medium`, `needs:reproduction` | Observed on mixed NAT and firewall topologies where peer discovery stalls and reconnect loops trigger degraded gossip propagation. Include topology details and peer logs when reporting. |
+| #125 | API rate limiting too aggressive for some use cases | `type:enhancement`, `area:api`, `priority:medium`, `status:triage` | Default limiter can throttle legitimate bursty clients (indexers, relayers, analytics backends). Proposed follow-up is endpoint-specific budgets and configurable per-key quotas. |
+
+#### Label Set Reference
+
+- **Type labels**: `type:bug`, `type:enhancement`, `type:docs`, `type:security`
+- **Area labels**: `area:runtime`, `area:networking`, `area:api`, `area:storage`, `area:consensus`
+- **Priority labels**: `priority:critical`, `priority:high`, `priority:medium`, `priority:low`
+- **Workflow labels**: `status:triage`, `status:investigating`, `status:in-progress`, `status:blocked`, `status:ready-for-release`, `needs:reproduction`
 
 ### Version 2.0.0
 - **Issue #101**: Fixed - Transaction validation edge case
