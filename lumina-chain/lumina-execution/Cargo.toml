@@ -9,3 +9,4 @@ lumina-crypto = { path = "../lumina-crypto" }
 serde = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+rayon = { workspace = true }

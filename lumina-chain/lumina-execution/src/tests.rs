@@ -246,3 +246,54 @@ fn test_health_index_computation() {
     // Should be a reasonably high health index (above 5000)
     assert!(state.health_index > 5000);
 }
+
+#[test]
+fn test_parallel_non_conflicting_transfers() {
+    let mut state = GlobalState::default();
+    let (s1, k1) = new_sender();
+    let (s2, k2) = new_sender();
+    let r1 = [9u8; 32];
+    let r2 = [10u8; 32];
+
+    state.accounts.entry(s1).or_default().lusd_balance = 100;
+    state.accounts.entry(s2).or_default().lusd_balance = 100;
+
+    let mut tx1 = Transaction {
+        sender: s1,
+        nonce: 0,
+        instruction: StablecoinInstruction::Transfer {
+            to: r1,
+            amount: 10,
+            asset: lumina_types::instruction::AssetType::LUSD,
+        },
+        signature: vec![0; 64],
+        gas_limit: 1_000_000,
+        gas_price: 1,
+    };
+    tx1.signature = lumina_crypto::signatures::sign(&k1, &tx1.signing_bytes());
+
+    let mut tx2 = Transaction {
+        sender: s2,
+        nonce: 0,
+        instruction: StablecoinInstruction::Transfer {
+            to: r2,
+            amount: 20,
+            asset: lumina_types::instruction::AssetType::LUSD,
+        },
+        signature: vec![0; 64],
+        gas_limit: 1_000_000,
+        gas_price: 1,
+    };
+    tx2.signature = lumina_crypto::signatures::sign(&k2, &tx2.signing_bytes());
+
+    let mut ctx = ExecutionContext {
+        state: &mut state,
+        height: 1,
+        timestamp: 1,
+    };
+
+    execute_transactions_parallel_non_conflicting(&[tx1, tx2], &mut ctx).unwrap();
+
+    assert_eq!(ctx.state.accounts.get(&r1).unwrap().lusd_balance, 10);
+    assert_eq!(ctx.state.accounts.get(&r2).unwrap().lusd_balance, 20);
+}

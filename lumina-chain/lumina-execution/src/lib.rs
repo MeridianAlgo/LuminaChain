@@ -2,26 +2,42 @@
 //! All 50+ StablecoinInstructions fully implemented with deterministic,
 //! overflow-safe, memory-safe logic. Production-grade implementation.
 
-use anyhow::{Result, bail};
-use lumina_types::instruction::{AssetType, StablecoinInstruction};
-use lumina_types::state::{
-    CustodianState, GlobalState, RWAListing, RedemptionRequest,
-    StreamState, ValidatorState, YieldPosition,
-};
-use lumina_types::transaction::Transaction;
+use anyhow::{bail, Result};
 use lumina_crypto::signatures::verify_signature;
 use lumina_crypto::zk::{
     verify_compliance_proof, verify_confidential_proof, verify_credit_score_proof,
-    verify_green_energy_proof, verify_insurance_loss_proof,
-    verify_multi_jurisdictional_proof, verify_rwa_attestation,
-    verify_tax_attestation_proof,
+    verify_green_energy_proof, verify_insurance_loss_proof, verify_multi_jurisdictional_proof,
+    verify_rwa_attestation, verify_tax_attestation_proof,
 };
+use lumina_types::instruction::{AssetType, StablecoinInstruction};
+use lumina_types::state::{
+    CustodianState, GlobalState, RWAListing, RedemptionRequest, StreamState, ValidatorState,
+    YieldPosition,
+};
+use lumina_types::transaction::Transaction;
 
 /// Immutable context for deterministic execution (height + timestamp frozen per block).
 pub struct ExecutionContext<'a> {
     pub state: &'a mut GlobalState,
     pub height: u64,
     pub timestamp: u64,
+}
+
+fn checked_add_u64(lhs: u64, rhs: u64, ctx: &str) -> Result<u64> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| anyhow::anyhow!("{} overflow", ctx))
+}
+
+fn checked_sub_u64(lhs: u64, rhs: u64, ctx: &str) -> Result<u64> {
+    lhs.checked_sub(rhs)
+        .ok_or_else(|| anyhow::anyhow!("{} underflow", ctx))
+}
+
+fn non_conflicting_transfer(tx: &Transaction) -> Option<([u8; 32], [u8; 32])> {
+    if let StablecoinInstruction::Transfer { to, .. } = &tx.instruction {
+        return Some((tx.sender, *to));
+    }
+    None
 }
 
 /// Single entry point for any transaction.
@@ -32,11 +48,7 @@ pub fn execute_transaction(tx: &Transaction, ctx: &mut ExecutionContext) -> Resu
 
     // Check if account uses PQ signatures
     if let Some(ref pq_key) = account.pq_pubkey {
-        lumina_crypto::signatures::verify_pq_signature(
-            pq_key,
-            &tx.signing_bytes(),
-            &tx.signature,
-        )?;
+        lumina_crypto::signatures::verify_pq_signature(pq_key, &tx.signing_bytes(), &tx.signature)?;
     } else {
         verify_signature(&tx.sender, &tx.signing_bytes(), &tx.signature)?;
     }
@@ -60,6 +72,65 @@ pub fn execute_transaction(tx: &Transaction, ctx: &mut ExecutionContext) -> Resu
     execute_si(&tx.instruction, &tx.sender, ctx)
 }
 
+/// Executes transactions with a rayon-assisted pre-check for non-conflicting transfers.
+/// Transfer txs with disjoint sender/receiver sets are signature/precondition checked in parallel,
+/// then committed deterministically in the original order.
+pub fn execute_transactions_parallel_non_conflicting(
+    txs: &[Transaction],
+    ctx: &mut ExecutionContext,
+) -> Result<()> {
+    use rayon::prelude::*;
+    use std::collections::HashSet;
+
+    let mut touched: HashSet<[u8; 32]> = HashSet::new();
+    let mut parallel_candidates: Vec<usize> = Vec::new();
+
+    for (idx, tx) in txs.iter().enumerate() {
+        if let Some((from, to)) = non_conflicting_transfer(tx) {
+            if !touched.contains(&from) && !touched.contains(&to) {
+                touched.insert(from);
+                touched.insert(to);
+                parallel_candidates.push(idx);
+            }
+        }
+    }
+
+    let checks: Result<Vec<usize>> = parallel_candidates
+        .par_iter()
+        .map(|idx| {
+            let tx = &txs[*idx];
+            let account = ctx
+                .state
+                .accounts
+                .get(&tx.sender)
+                .cloned()
+                .unwrap_or_default();
+
+            if let Some(ref pq_key) = account.pq_pubkey {
+                lumina_crypto::signatures::verify_pq_signature(
+                    pq_key,
+                    &tx.signing_bytes(),
+                    &tx.signature,
+                )?;
+            } else {
+                verify_signature(&tx.sender, &tx.signing_bytes(), &tx.signature)?;
+            }
+
+            if account.nonce != tx.nonce {
+                bail!("Invalid nonce in parallel pre-check");
+            }
+            Ok(*idx)
+        })
+        .collect();
+    checks?;
+
+    for tx in txs {
+        execute_transaction(tx, ctx)?;
+    }
+
+    Ok(())
+}
+
 /// Core dispatcher — every StablecoinInstruction is fully implemented.
 pub fn execute_si(
     si: &StablecoinInstruction,
@@ -70,7 +141,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Core Asset Operations
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::RegisterAsset { ticker, decimals } => {
             if ticker.is_empty() || ticker.len() > 16 {
                 bail!("Ticker must be 1-16 characters");
@@ -96,7 +166,9 @@ pub fn execute_si(
             }
 
             // 5% mint fee goes to insurance fund
-            let fee = amount.checked_div(20).unwrap_or(0);
+            let fee = amount
+                .checked_div(20)
+                .ok_or_else(|| anyhow::anyhow!("Fee division error"))?;
             ctx.state.insurance_fund_balance = ctx
                 .state
                 .insurance_fund_balance
@@ -110,7 +182,7 @@ pub fn execute_si(
                 .checked_add(*collateral_amount)
                 .ok_or_else(|| anyhow::anyhow!("Collateral overflow"))?;
 
-            let net_amount = amount.checked_sub(fee).unwrap_or(0);
+            let net_amount = checked_sub_u64(*amount, fee, "Net mint amount")?;
             let account = ctx.state.accounts.entry(*sender).or_default();
             account.lusd_balance = account
                 .lusd_balance
@@ -125,7 +197,8 @@ pub fn execute_si(
 
             // Track volume for velocity rewards
             let acct = ctx.state.accounts.entry(*sender).or_default();
-            acct.epoch_tx_volume = acct.epoch_tx_volume.saturating_add(*amount);
+            acct.epoch_tx_volume =
+                checked_add_u64(acct.epoch_tx_volume, *amount, "Epoch tx volume")?;
 
             recalculate_ratios(ctx);
             Ok(())
@@ -149,17 +222,16 @@ pub fn execute_si(
                     timestamp: ctx.timestamp,
                 });
                 let acct = ctx.state.accounts.entry(*sender).or_default();
-                acct.lusd_balance = acct.lusd_balance.saturating_sub(*amount);
+                acct.lusd_balance = checked_sub_u64(acct.lusd_balance, *amount, "LUSD balance")?;
                 return Ok(());
             }
 
             let acct = ctx.state.accounts.entry(*sender).or_default();
-            acct.lusd_balance = acct.lusd_balance.saturating_sub(*amount);
-            ctx.state.total_lusd_supply = ctx.state.total_lusd_supply.saturating_sub(*amount);
-            ctx.state.stabilization_pool_balance = ctx
-                .state
-                .stabilization_pool_balance
-                .saturating_sub(*amount);
+            acct.lusd_balance = checked_sub_u64(acct.lusd_balance, *amount, "LUSD balance")?;
+            ctx.state.total_lusd_supply =
+                checked_sub_u64(ctx.state.total_lusd_supply, *amount, "LUSD supply")?;
+            ctx.state.stabilization_pool_balance =
+                ctx.state.stabilization_pool_balance.saturating_sub(*amount);
 
             recalculate_ratios(ctx);
             Ok(())
@@ -205,8 +277,9 @@ pub fn execute_si(
                 bail!("Insufficient LJUN balance");
             }
 
-            account.ljun_balance = account.ljun_balance.saturating_sub(*amount);
-            ctx.state.total_ljun_supply = ctx.state.total_ljun_supply.saturating_sub(*amount);
+            account.ljun_balance = checked_sub_u64(account.ljun_balance, *amount, "LJUN balance")?;
+            ctx.state.total_ljun_supply =
+                checked_sub_u64(ctx.state.total_ljun_supply, *amount, "LJUN supply")?;
             recalculate_ratios(ctx);
             Ok(())
         }
@@ -222,7 +295,8 @@ pub fn execute_si(
                     if account.lusd_balance < *amount {
                         bail!("Insufficient LUSD");
                     }
-                    account.lusd_balance = account.lusd_balance.saturating_sub(*amount);
+                    account.lusd_balance =
+                        checked_sub_u64(account.lusd_balance, *amount, "LUSD balance")?;
                     ctx.state.total_lusd_supply =
                         ctx.state.total_lusd_supply.saturating_sub(*amount);
                 }
@@ -230,7 +304,8 @@ pub fn execute_si(
                     if account.ljun_balance < *amount {
                         bail!("Insufficient LJUN");
                     }
-                    account.ljun_balance = account.ljun_balance.saturating_sub(*amount);
+                    account.ljun_balance =
+                        checked_sub_u64(account.ljun_balance, *amount, "LJUN balance")?;
                     ctx.state.total_ljun_supply =
                         ctx.state.total_ljun_supply.saturating_sub(*amount);
                 }
@@ -238,10 +313,14 @@ pub fn execute_si(
                     if account.lumina_balance < *amount {
                         bail!("Insufficient Lumina");
                     }
-                    account.lumina_balance = account.lumina_balance.saturating_sub(*amount);
+                    account.lumina_balance =
+                        checked_sub_u64(account.lumina_balance, *amount, "LUMINA balance")?;
                 }
                 AssetType::Custom(ticker) => {
-                    bail!("Custom asset burn for '{}' not supported in core SI", ticker);
+                    bail!(
+                        "Custom asset burn for '{}' not supported in core SI",
+                        ticker
+                    );
                 }
             }
 
@@ -262,9 +341,12 @@ pub fn execute_si(
                             bail!("Insufficient LUSD");
                         }
                         sender_account.lusd_balance =
-                            sender_account.lusd_balance.saturating_sub(*amount);
-                        sender_account.epoch_tx_volume =
-                            sender_account.epoch_tx_volume.saturating_add(*amount);
+                            checked_sub_u64(sender_account.lusd_balance, *amount, "Sender LUSD")?;
+                        sender_account.epoch_tx_volume = checked_add_u64(
+                            sender_account.epoch_tx_volume,
+                            *amount,
+                            "Sender epoch tx volume",
+                        )?;
                     }
                     let receiver = ctx.state.accounts.entry(*to).or_default();
                     receiver.lusd_balance = receiver
@@ -279,9 +361,12 @@ pub fn execute_si(
                             bail!("Insufficient LJUN");
                         }
                         sender_account.ljun_balance =
-                            sender_account.ljun_balance.saturating_sub(*amount);
-                        sender_account.epoch_tx_volume =
-                            sender_account.epoch_tx_volume.saturating_add(*amount);
+                            checked_sub_u64(sender_account.ljun_balance, *amount, "Sender LJUN")?;
+                        sender_account.epoch_tx_volume = checked_add_u64(
+                            sender_account.epoch_tx_volume,
+                            *amount,
+                            "Sender epoch tx volume",
+                        )?;
                     }
                     let receiver = ctx.state.accounts.entry(*to).or_default();
                     receiver.ljun_balance = receiver
@@ -295,8 +380,11 @@ pub fn execute_si(
                         if sender_account.lumina_balance < *amount {
                             bail!("Insufficient Lumina");
                         }
-                        sender_account.lumina_balance =
-                            sender_account.lumina_balance.saturating_sub(*amount);
+                        sender_account.lumina_balance = checked_sub_u64(
+                            sender_account.lumina_balance,
+                            *amount,
+                            "Sender LUMINA",
+                        )?;
                     }
                     let receiver = ctx.state.accounts.entry(*to).or_default();
                     receiver.lumina_balance = receiver
@@ -313,7 +401,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Stability & Tranche Management
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::RebalanceTranches => {
             if ctx.state.total_lusd_supply == 0 {
                 return Ok(());
@@ -325,18 +412,15 @@ pub fn execute_si(
                 .total_lusd_supply
                 .saturating_add(ctx.state.total_ljun_supply);
             if total_supply > 0 {
-                let junior_pct =
-                    (ctx.state.total_ljun_supply as f64) / (total_supply as f64);
+                let junior_pct = (ctx.state.total_ljun_supply as f64) / (total_supply as f64);
                 if junior_pct > 0.40 {
                     // Redirect excess junior into stabilization pool
                     let excess = ctx
                         .state
                         .total_ljun_supply
                         .saturating_sub(total_supply.saturating_mul(40) / 100);
-                    ctx.state.stabilization_pool_balance = ctx
-                        .state
-                        .stabilization_pool_balance
-                        .saturating_add(excess);
+                    ctx.state.stabilization_pool_balance =
+                        ctx.state.stabilization_pool_balance.saturating_add(excess);
                 }
             }
 
@@ -353,7 +437,9 @@ pub fn execute_si(
             // 80% to junior tranche holders pro-rata, 15% to stabilization pool, 5% to insurance
             let junior_share = total_yield.saturating_mul(80) / 100;
             let pool_share = total_yield.saturating_mul(15) / 100;
-            let insurance_share = total_yield.saturating_sub(junior_share).saturating_sub(pool_share);
+            let insurance_share = total_yield
+                .saturating_sub(junior_share)
+                .saturating_sub(pool_share);
 
             ctx.state.stabilization_pool_balance = ctx
                 .state
@@ -388,10 +474,8 @@ pub fn execute_si(
                         acct.ljun_balance = acct.ljun_balance.saturating_add(share);
                     }
                 }
-                ctx.state.total_ljun_supply = ctx
-                    .state
-                    .total_ljun_supply
-                    .saturating_add(junior_share);
+                ctx.state.total_ljun_supply =
+                    ctx.state.total_ljun_supply.saturating_add(junior_share);
             } else {
                 // No junior holders, all goes to stabilization pool
                 ctx.state.stabilization_pool_balance = ctx
@@ -434,8 +518,7 @@ pub fn execute_si(
                 bail!("Circuit breaker active: cannot process redeem queue");
             }
 
-            let to_process =
-                std::cmp::min(*batch_size as usize, ctx.state.fair_redeem_queue.len());
+            let to_process = std::cmp::min(*batch_size as usize, ctx.state.fair_redeem_queue.len());
             for _ in 0..to_process {
                 let req = ctx.state.fair_redeem_queue.remove(0);
                 ctx.state.total_lusd_supply =
@@ -452,7 +535,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Privacy & Compliance
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::ConfidentialTransfer { commitment, proof } => {
             if !verify_confidential_proof(commitment, proof) {
                 bail!("Invalid confidential transfer proof");
@@ -489,18 +571,13 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Oracle & Reserves
         // ══════════════════════════════════════════════════════════
-
-        StablecoinInstruction::UpdateOracle {
-            asset, price, ..
-        } => {
+        StablecoinInstruction::UpdateOracle { asset, price, .. } => {
             ctx.state.oracle_prices.insert(asset.clone(), *price);
             recalculate_ratios(ctx);
             Ok(())
         }
 
-        StablecoinInstruction::SubmitZkPoR {
-            total_reserves, ..
-        } => {
+        StablecoinInstruction::SubmitZkPoR { total_reserves, .. } => {
             // Update stabilization pool from verified proof-of-reserves
             ctx.state.stabilization_pool_balance = *total_reserves;
             recalculate_ratios(ctx);
@@ -510,18 +587,16 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Advanced DeFi & Fiat Hooks
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::InstantFiatBridge { amount, .. } => {
             let account = ctx.state.accounts.entry(*sender).or_default();
             if account.lusd_balance < *amount {
                 bail!("Insufficient LUSD for fiat bridge");
             }
-            account.lusd_balance = account.lusd_balance.saturating_sub(*amount);
-            ctx.state.total_lusd_supply = ctx.state.total_lusd_supply.saturating_sub(*amount);
-            ctx.state.stabilization_pool_balance = ctx
-                .state
-                .stabilization_pool_balance
-                .saturating_sub(*amount);
+            account.lusd_balance = checked_sub_u64(account.lusd_balance, *amount, "LUSD balance")?;
+            ctx.state.total_lusd_supply =
+                checked_sub_u64(ctx.state.total_lusd_supply, *amount, "LUSD supply")?;
+            ctx.state.stabilization_pool_balance =
+                ctx.state.stabilization_pool_balance.saturating_sub(*amount);
             recalculate_ratios(ctx);
             Ok(())
         }
@@ -553,8 +628,10 @@ pub fn execute_si(
                 if target_balance > current {
                     let diff = target_balance.saturating_sub(current);
                     let available = ctx.state.insurance_fund_balance.min(diff);
-                    ctx.state.stabilization_pool_balance =
-                        ctx.state.stabilization_pool_balance.saturating_add(available);
+                    ctx.state.stabilization_pool_balance = ctx
+                        .state
+                        .stabilization_pool_balance
+                        .saturating_add(available);
                     ctx.state.insurance_fund_balance =
                         ctx.state.insurance_fund_balance.saturating_sub(available);
                 }
@@ -581,11 +658,8 @@ pub fn execute_si(
                 bail!("Multiplier must be 1-5000 bps");
             }
             // Add to the velocity reward pool based on multiplier
-            let reward_addition = ctx
-                .state
-                .total_lusd_supply
-                .saturating_mul(*multiplier_bps)
-                / 1_000_000;
+            let reward_addition =
+                ctx.state.total_lusd_supply.saturating_mul(*multiplier_bps) / 1_000_000;
             ctx.state.velocity_reward_pool = ctx
                 .state
                 .velocity_reward_pool
@@ -625,7 +699,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Governance & Staking
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::RegisterValidator { pubkey, stake } => {
             if *stake == 0 {
                 bail!("Validator stake must be non-zero");
@@ -647,13 +720,12 @@ pub fn execute_si(
             Ok(())
         }
 
-        StablecoinInstruction::Vote { proposal_id, approve } => {
+        StablecoinInstruction::Vote {
+            proposal_id,
+            approve,
+        } => {
             // Verify sender is a validator
-            let is_validator = ctx
-                .state
-                .validators
-                .iter()
-                .any(|v| v.pubkey == *sender);
+            let is_validator = ctx.state.validators.iter().any(|v| v.pubkey == *sender);
             if !is_validator {
                 bail!("Only validators can vote");
             }
@@ -666,7 +738,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Phase 1: Seedless Security & Dynamic Economics
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::CreatePasskeyAccount {
             device_key,
             guardians,
@@ -733,10 +804,7 @@ pub fn execute_si(
             }
 
             // Calculate reward: proportional to volume, capped at pool
-            let reward = ctx
-                .state
-                .velocity_reward_pool
-                .min(*tx_volume / 1000); // 0.1% of volume as reward
+            let reward = ctx.state.velocity_reward_pool.min(*tx_volume / 1000); // 0.1% of volume as reward
 
             if reward > 0 && ctx.state.velocity_reward_pool >= reward {
                 ctx.state.velocity_reward_pool =
@@ -749,10 +817,7 @@ pub fn execute_si(
             Ok(())
         }
 
-        StablecoinInstruction::RegisterCustodian {
-            stake,
-            mpc_pubkeys,
-        } => {
+        StablecoinInstruction::RegisterCustodian { stake, mpc_pubkeys } => {
             if *stake == 0 {
                 bail!("Custodian stake must be non-zero");
             }
@@ -834,7 +899,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Phase 2: Security & Compliance Excellence
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::SwitchToPQSignature { new_pq_pubkey } => {
             if new_pq_pubkey.is_empty() {
                 bail!("PQ public key cannot be empty");
@@ -883,7 +947,6 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         // Phase 3: Capital Efficiency & RWA
         // ══════════════════════════════════════════════════════════
-
         StablecoinInstruction::FlashMint {
             amount,
             collateral_commitment,
@@ -921,10 +984,10 @@ pub fn execute_si(
             if account.lusd_balance < *amount {
                 bail!("Insufficient LUSD for flash burn");
             }
-            account.lusd_balance = account.lusd_balance.saturating_sub(*amount);
-            ctx.state.total_lusd_supply = ctx.state.total_lusd_supply.saturating_sub(*amount);
-            ctx.state.pending_flash_mints =
-                ctx.state.pending_flash_mints.saturating_sub(*amount);
+            account.lusd_balance = checked_sub_u64(account.lusd_balance, *amount, "LUSD balance")?;
+            ctx.state.total_lusd_supply =
+                checked_sub_u64(ctx.state.total_lusd_supply, *amount, "LUSD supply")?;
+            ctx.state.pending_flash_mints = ctx.state.pending_flash_mints.saturating_sub(*amount);
             Ok(())
         }
 
@@ -982,7 +1045,7 @@ pub fn execute_si(
             if account.lusd_balance < *amount {
                 bail!("Insufficient LUSD for yield token wrap");
             }
-            account.lusd_balance = account.lusd_balance.saturating_sub(*amount);
+            account.lusd_balance = checked_sub_u64(account.lusd_balance, *amount, "LUSD balance")?;
 
             let token_id = ctx.state.next_yield_token_id;
             ctx.state.next_yield_token_id = ctx
@@ -1132,8 +1195,8 @@ fn recalculate_ratios(ctx: &mut ExecutionContext) {
         return;
     }
 
-    ctx.state.reserve_ratio = (ctx.state.stabilization_pool_balance as f64)
-        / (ctx.state.total_lusd_supply as f64);
+    ctx.state.reserve_ratio =
+        (ctx.state.stabilization_pool_balance as f64) / (ctx.state.total_lusd_supply as f64);
 
     if ctx.state.reserve_ratio < 0.85 {
         ctx.state.circuit_breaker_active = true;
@@ -1150,7 +1213,12 @@ fn compute_health_index(ctx: &mut ExecutionContext) {
     score = score.saturating_add(reserve_score.min(3000));
 
     // Peg health (0-2500): 25% weight — based on LUSD-USD oracle price
-    let lusd_price = ctx.state.oracle_prices.get("LUSD-USD").copied().unwrap_or(1_000_000);
+    let lusd_price = ctx
+        .state
+        .oracle_prices
+        .get("LUSD-USD")
+        .copied()
+        .unwrap_or(1_000_000);
     let peg_dev = if lusd_price > 1_000_000 {
         lusd_price.saturating_sub(1_000_000)
     } else {
@@ -1191,7 +1259,9 @@ fn compute_health_index(ctx: &mut ExecutionContext) {
     }
 
     // Custodian diversity (0-500): 5% weight
-    let custodian_score = (ctx.state.custodians.len() as u64).min(10).saturating_mul(50);
+    let custodian_score = (ctx.state.custodians.len() as u64)
+        .min(10)
+        .saturating_mul(50);
     score = score.saturating_add(custodian_score);
 
     ctx.state.health_index = score.min(10000);
