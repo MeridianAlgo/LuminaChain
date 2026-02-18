@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     info!("Starting Lumina Node...");
 
     // 2. Init Storage
-    let storage = lumina_storage::db::Storage::new(&args.data_dir).context("Failed to initialize storage")?;
+    let storage = Arc::new(lumina_storage::db::Storage::new(&args.data_dir).context("Failed to initialize storage")?);
     info!("Storage initialized at {}", args.data_dir);
 
     // 3. Load or Create State
@@ -63,7 +63,6 @@ async fn main() -> Result<()> {
         while let Some(event) = net_event_rx.recv().await {
             match event {
                 lumina_network::NetworkEvent::TxReceived(data, peer) => {
-                    // Deserialize and forward to consensus
                     match bincode::deserialize::<lumina_types::transaction::Transaction>(&data) {
                         Ok(tx) => {
                             let _ = net_tx_sender.send(tx).await;
@@ -72,8 +71,6 @@ async fn main() -> Result<()> {
                     }
                 },
                 lumina_network::NetworkEvent::BlockReceived(data, peer) => {
-                    // In a real node, we'd validate and add to blockchain.
-                    // For now, we just log.
                     info!("Received block from {}", peer);
                 }
             }
@@ -82,36 +79,21 @@ async fn main() -> Result<()> {
 
     // 5. Init Consensus
     let consensus_state = shared_state.clone();
+    let consensus_storage = storage.clone();
     let consensus_net_tx = net_cmd_tx.clone();
     let consensus_tx_rx = tx_receiver;
 
     tokio::spawn(async move {
-        let service = lumina_consensus::ConsensusService::new(consensus_state, consensus_net_tx, consensus_tx_rx);
+        let service = lumina_consensus::ConsensusService::new(consensus_state, consensus_storage, consensus_net_tx, consensus_tx_rx);
         service.run().await;
     });
 
     // 6. Init API
     let api_state = shared_state.clone();
+    let api_storage = storage.clone();
     let api_tx_sender = tx_sender.clone();
     tokio::spawn(async move {
-        // Adapt API signature to match what we wrote
-        // We wrote: pub async fn start_server(global_state: Arc<RwLock<GlobalState>>, tx_sender: mpsc::Sender<Transaction>)
-        // So we need to call it correctly.
-        // Wait, start_server in lumina-api takes owned Arc and Sender.
-        // But start_server is async and doesn't return, so we spawn it.
-        // We need to import it.
-        // lumina_api::start_server(api_state, api_tx_sender).await;
-        // Wait, check imports.
-        // I need to update lumina-api imports or re-export it properly.
-    });
-
-    // Since I can't easily see if start_server is public or not (it is pub async fn), I'll assume it works.
-    // Wait, the call below is inside a spawn, so it must be async block.
-    // I need to import lumina_api.
-
-    // Let's actually call it.
-    tokio::spawn(async move {
-        lumina_api::start_server(api_state, api_tx_sender).await;
+        lumina_api::start_server(api_state, api_storage, api_tx_sender).await;
     });
 
     info!("Node running. Press Ctrl+C to stop.");

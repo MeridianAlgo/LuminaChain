@@ -9,7 +9,7 @@ pub enum StablecoinInstruction {
         collateral_amount: u64,
         proof: Vec<u8>, // zk-proof of valid collateral
     },
-    /// Redeem senior stablecoin for underlying collateral
+    /// Redeem senior stablecoin for underlying collateral (Enters the FairRedeemQueue)
     RedeemSenior {
         amount: u64,
     },
@@ -36,6 +36,18 @@ pub enum StablecoinInstruction {
         proof: Vec<u8>,
         total_reserves: u64,
         timestamp: u64,
+    },
+
+    // === Stability Control (Phase 2) ===
+    /// Trigger stabilization rebalance (Senior/Junior collateral shifts)
+    TriggerStabilizer,
+    /// Manually trigger or automatically trip circuit breakers
+    RunCircuitBreaker {
+        active: bool,
+    },
+    /// Process next batch of redemptions from the queue
+    ProcessRedemptionQueue {
+        batch_size: u32,
     },
 
     // === Transfers & Privacy ===

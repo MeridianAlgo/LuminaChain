@@ -15,5 +15,6 @@ ark-std = { workspace = true }
 ark-ff = { workspace = true }
 ark-snark = "0.4"
 ark-serialize = "0.4"
+ark-relations = "0.4"
 anyhow = { workspace = true }
 thiserror = { workspace = true }

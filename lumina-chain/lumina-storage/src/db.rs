@@ -1,6 +1,7 @@
 use rocksdb::{DB, Options};
 use anyhow::{anyhow, Result};
 use lumina_types::state::GlobalState;
+use lumina_types::block::Block;
 use bincode;
 
 pub struct Storage {
@@ -27,8 +28,26 @@ impl Storage {
                 let decoded: GlobalState = bincode::deserialize(&value).map_err(|e| anyhow!("Deserialization error: {}", e))?;
                 Ok(decoded)
             }
-            Ok(None) => Ok(GlobalState::default()), // Return empty state if none exists
+            Ok(None) => Ok(GlobalState::default()),
             Err(e) => Err(anyhow!("DB read error: {}", e)),
+        }
+    }
+
+    pub fn save_block(&self, block: &Block) -> Result<()> {
+        let height_key = format!("block_height_{}", block.header.height);
+        let hash_key = format!("block_hash_{}", hex::encode(block.hash()));
+        let encoded = bincode::serialize(block).map_err(|e| anyhow!("Serialization error: {}", e))?;
+        
+        self.db.put(height_key.as_bytes(), &encoded).map_err(|e| anyhow!("DB height-index error: {}", e))?;
+        self.db.put(hash_key.as_bytes(), &encoded).map_err(|e| anyhow!("DB hash-index error: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_block_by_height(&self, height: u64) -> Result<Option<Block>> {
+        let key = format!("block_height_{}", height);
+        match self.db.get(key.as_bytes())? {
+             Some(v) => Ok(Some(bincode::deserialize(&v)?)),
+             None => Ok(None),
         }
     }
 }
