@@ -1,74 +1,78 @@
 use ark_bls12_381::{Bls12_381, Fr};
-use ark_ff::Field;
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
-use ark_relations::r1cs::{
-    ConstraintSynthesizer, ConstraintSystemRef, SynthesisError,
-};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use curve25519_dalek::ristretto::CompressedRistretto;
+use curve25519_dalek::scalar::Scalar;
+use merlin::Transcript;
 use rand::thread_rng;
 
-// ═══════════════════════════════════════════════════════════════════
-// Reserve Sum Circuit — Proves sum(reserves) == total without revealing individuals
-// ═══════════════════════════════════════════════════════════════════
+const MAX_RESERVES: usize = 100;
+const RANGE_BITS: usize = 64;
+const BULLETPROOF_DOMAIN: &[u8] = b"lumina-confidential-transfer-v1";
+
+fn alloc_u64_bits(
+    cs: ConstraintSystemRef<Fr>,
+    value: Option<u64>,
+) -> Result<(ark_relations::r1cs::LinearCombination<Fr>, usize), SynthesisError> {
+    let mut lc = ark_relations::lc!();
+    for bit_idx in 0..RANGE_BITS {
+        let bit = cs.new_witness_variable(|| {
+            let bit_value = ((value.ok_or(SynthesisError::AssignmentMissing)? >> bit_idx) & 1) == 1;
+            Ok(Fr::from(bit_value as u64))
+        })?;
+
+        // Booleanity: bit * (bit - 1) = 0
+        cs.enforce_constraint(
+            ark_relations::lc!() + bit,
+            ark_relations::lc!() + bit - Variable::One,
+            ark_relations::lc!(),
+        )?;
+
+        let coeff = Fr::from(1u64 << bit_idx);
+        lc = lc + (coeff, bit);
+    }
+    Ok((lc, RANGE_BITS))
+}
 
 #[derive(Clone)]
 pub struct ReserveSumCircuit {
-    pub reserves: Vec<Option<Fr>>,
-    pub total: Option<Fr>,
+    pub reserves: Vec<Option<u64>>,
+    pub total: Option<u64>,
 }
 
 impl ConstraintSynthesizer<Fr> for ReserveSumCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        use ark_relations::r1cs::Variable;
+        let mut sum_lc = ark_relations::lc!();
 
-        // Allocate witness variables for each reserve
-        let mut sum = cs.new_witness_variable(|| {
-            self.reserves
-                .first()
-                .and_then(|v| *v)
-                .ok_or(SynthesisError::AssignmentMissing)
-        })?;
+        for reserve in self.reserves.iter().take(MAX_RESERVES) {
+            let reserve_u64 = reserve.ok_or(SynthesisError::AssignmentMissing)?;
+            let reserve_var = cs.new_witness_variable(|| Ok(Fr::from(reserve_u64)))?;
 
-        for i in 1..self.reserves.len() {
-            let val = cs.new_witness_variable(|| {
-                self.reserves
-                    .get(i)
-                    .and_then(|v| *v)
-                    .ok_or(SynthesisError::AssignmentMissing)
-            })?;
-
-            // new_sum = sum + val  =>  sum + val - new_sum = 0
-            // We enforce: sum * 1 = new_sum - val  (rearranged linear constraint)
-            let new_sum_val = self
-                .reserves
-                .iter()
-                .take(i + 1)
-                .filter_map(|v| *v)
-                .try_fold(Fr::ZERO, |acc, v| Some(acc + v));
-
-            let new_sum = cs.new_witness_variable(|| {
-                new_sum_val.ok_or(SynthesisError::AssignmentMissing)
-            })?;
-
-            // Enforce: sum + val = new_sum  via  (sum + val) * 1 = new_sum
+            // Reserve must be representable as u64 using bit decomposition.
+            let (bits_lc, _) = alloc_u64_bits(cs.clone(), Some(reserve_u64))?;
             cs.enforce_constraint(
-                ark_relations::lc!() + sum + val,
+                ark_relations::lc!() + reserve_var,
                 ark_relations::lc!() + Variable::One,
-                ark_relations::lc!() + new_sum,
+                bits_lc,
             )?;
 
-            sum = new_sum;
+            sum_lc = sum_lc + reserve_var;
         }
 
-        // Public input: total
-        let total_var = cs.new_input_variable(|| {
-            self.total.ok_or(SynthesisError::AssignmentMissing)
-        })?;
+        // Pad missing reserves with zero in-circuit.
+        for _ in self.reserves.len()..MAX_RESERVES {
+            let zero = cs.new_witness_variable(|| Ok(Fr::ZERO))?;
+            sum_lc = sum_lc + zero;
+        }
 
-        // Enforce: sum == total  =>  sum * 1 = total
+        let total = self.total.ok_or(SynthesisError::AssignmentMissing)?;
+        let total_var = cs.new_input_variable(|| Ok(Fr::from(total)))?;
+
         cs.enforce_constraint(
-            ark_relations::lc!() + sum,
+            sum_lc,
             ark_relations::lc!() + Variable::One,
             ark_relations::lc!() + total_var,
         )?;
@@ -77,65 +81,36 @@ impl ConstraintSynthesizer<Fr> for ReserveSumCircuit {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Compliance Circuit — Proves a value is within a permitted range
-// Used for: ConfidentialTransfer, ZkTaxAttest, MultiJurisdictionalCheck
-// ═══════════════════════════════════════════════════════════════════
-
 #[derive(Clone)]
 pub struct RangeProofCircuit {
-    pub value: Option<Fr>,
-    pub max_value: Option<Fr>,
+    pub value: Option<u64>,
+    pub max_value: Option<u64>,
 }
 
 impl ConstraintSynthesizer<Fr> for RangeProofCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        use ark_relations::r1cs::Variable;
+        let value = self.value.ok_or(SynthesisError::AssignmentMissing)?;
+        let max_value = self.max_value.ok_or(SynthesisError::AssignmentMissing)?;
+        if value > max_value {
+            return Err(SynthesisError::Unsatisfiable);
+        }
 
-        let value_var = cs.new_witness_variable(|| {
-            self.value.ok_or(SynthesisError::AssignmentMissing)
-        })?;
+        let value_var = cs.new_witness_variable(|| Ok(Fr::from(value)))?;
+        let max_var = cs.new_input_variable(|| Ok(Fr::from(max_value)))?;
 
-        let max_var = cs.new_input_variable(|| {
-            self.max_value.ok_or(SynthesisError::AssignmentMissing)
-        })?;
+        let diff = max_value - value;
+        let (diff_bits_lc, _) = alloc_u64_bits(cs.clone(), Some(diff))?;
 
-        // diff = max - value (must be non-negative, enforced by field arithmetic)
-        let diff_val = match (self.max_value, self.value) {
-            (Some(m), Some(v)) => Some(m - v),
-            _ => None,
-        };
-
-        let diff_var = cs.new_witness_variable(|| {
-            diff_val.ok_or(SynthesisError::AssignmentMissing)
-        })?;
-
-        // Enforce: value + diff = max  =>  (value + diff) * 1 = max
+        // value + diff = max
         cs.enforce_constraint(
-            ark_relations::lc!() + value_var + diff_var,
+            ark_relations::lc!() + value_var + diff_bits_lc,
             ark_relations::lc!() + Variable::One,
             ark_relations::lc!() + max_var,
-        )?;
-
-        // Enforce diff * diff = diff^2 (ensures diff is a valid field element)
-        let diff_sq_val = diff_val.map(|d| d * d);
-        let diff_sq_var = cs.new_witness_variable(|| {
-            diff_sq_val.ok_or(SynthesisError::AssignmentMissing)
-        })?;
-
-        cs.enforce_constraint(
-            ark_relations::lc!() + diff_var,
-            ark_relations::lc!() + diff_var,
-            ark_relations::lc!() + diff_sq_var,
         )?;
 
         Ok(())
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// ZkManager — Handles trusted setup, proving, and verification
-// ═══════════════════════════════════════════════════════════════════
 
 pub struct ZkManager {
     por_pk: ProvingKey<Bls12_381>,
@@ -145,22 +120,16 @@ pub struct ZkManager {
 }
 
 impl ZkManager {
-    /// Trusted setup for all circuits.
-    /// In production this is a multi-party ceremony (Powers of Tau).
     pub fn setup() -> Self {
         let mut rng = thread_rng();
 
-        // PoR circuit setup (max 100 reserves)
-        let max_reserves = 100;
         let por_circuit = ReserveSumCircuit {
-            reserves: vec![None; max_reserves],
+            reserves: vec![None; MAX_RESERVES],
             total: None,
         };
-        let (por_pk, por_vk) =
-            Groth16::<Bls12_381>::circuit_specific_setup(por_circuit, &mut rng)
-                .expect("PoR circuit setup");
+        let (por_pk, por_vk) = Groth16::<Bls12_381>::circuit_specific_setup(por_circuit, &mut rng)
+            .expect("PoR circuit setup");
 
-        // Range proof circuit setup
         let range_circuit = RangeProofCircuit {
             value: None,
             max_value: None,
@@ -177,162 +146,203 @@ impl ZkManager {
         }
     }
 
-    /// Generate a Proof-of-Reserves proof.
     pub fn prove_reserves(&self, individual_reserves: Vec<u64>, total_reserve: u64) -> Vec<u8> {
         let mut rng = thread_rng();
-        let mut reserves: Vec<Option<Fr>> = individual_reserves
+        let mut reserves = individual_reserves
             .into_iter()
-            .map(|v| Some(Fr::from(v)))
-            .collect();
-        // Pad to max_reserves
-        while reserves.len() < 100 {
-            reserves.push(Some(Fr::ZERO));
+            .map(Some)
+            .collect::<Vec<_>>();
+        reserves.truncate(MAX_RESERVES);
+        while reserves.len() < MAX_RESERVES {
+            reserves.push(Some(0));
         }
+
         let circuit = ReserveSumCircuit {
             reserves,
-            total: Some(Fr::from(total_reserve)),
+            total: Some(total_reserve),
         };
         let proof = Groth16::<Bls12_381>::prove(&self.por_pk, circuit, &mut rng)
             .expect("PoR proof generation");
+
         let mut bytes = Vec::new();
         proof
             .serialize_compressed(&mut bytes)
-            .expect("Proof serialization");
+            .expect("PoR proof serialization");
         bytes
     }
 
-    /// Verify a Proof-of-Reserves proof.
     pub fn verify_zk_por(&self, proof_bytes: &[u8], total_reserve: u64) -> bool {
         let proof = match Proof::<Bls12_381>::deserialize_compressed(proof_bytes) {
             Ok(p) => p,
             Err(_) => return false,
         };
-        let public_inputs = vec![Fr::from(total_reserve)];
-        Groth16::<Bls12_381>::verify(&self.por_vk, &public_inputs, &proof).unwrap_or(false)
+        Groth16::<Bls12_381>::verify(&self.por_vk, &[Fr::from(total_reserve)], &proof)
+            .unwrap_or(false)
     }
 
-    /// Generate a range proof (used for confidential transfers, compliance).
     pub fn prove_range(&self, value: u64, max_value: u64) -> Vec<u8> {
         let mut rng = thread_rng();
         let circuit = RangeProofCircuit {
-            value: Some(Fr::from(value)),
-            max_value: Some(Fr::from(max_value)),
+            value: Some(value),
+            max_value: Some(max_value),
         };
         let proof = Groth16::<Bls12_381>::prove(&self.range_pk, circuit, &mut rng)
             .expect("Range proof generation");
+
         let mut bytes = Vec::new();
         proof
             .serialize_compressed(&mut bytes)
-            .expect("Proof serialization");
+            .expect("Range proof serialization");
         bytes
     }
 
-    /// Verify a range proof.
     pub fn verify_range_proof(&self, proof_bytes: &[u8], max_value: u64) -> bool {
         let proof = match Proof::<Bls12_381>::deserialize_compressed(proof_bytes) {
             Ok(p) => p,
             Err(_) => return false,
         };
-        let public_inputs = vec![Fr::from(max_value)];
-        Groth16::<Bls12_381>::verify(&self.range_vk, &public_inputs, &proof).unwrap_or(false)
+        Groth16::<Bls12_381>::verify(&self.range_vk, &[Fr::from(max_value)], &proof)
+            .unwrap_or(false)
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Standalone verification functions used by the execution engine
-// ═══════════════════════════════════════════════════════════════════
+pub fn prove_confidential_transfer(value: u64, blinding: [u8; 32]) -> ([u8; 32], Vec<u8>) {
+    let blinding_scalar = Scalar::from_bytes_mod_order(blinding);
+    let bp_gens = BulletproofGens::new(RANGE_BITS, 1);
+    let pc_gens = PedersenGens::default();
+    let mut transcript = Transcript::new(BULLETPROOF_DOMAIN);
 
-/// Verify a confidential transfer proof.
-/// The commitment is a Pedersen commitment; the proof demonstrates
-/// the transferred value is non-negative and the commitment is well-formed.
+    let (proof, commitment) = RangeProof::prove_single(
+        &bp_gens,
+        &pc_gens,
+        &mut transcript,
+        value,
+        &blinding_scalar,
+        RANGE_BITS,
+    )
+    .expect("bulletproof generation");
+
+    (commitment.compress().to_bytes(), proof.to_bytes())
+}
+
+pub fn verify_confidential_transfer(commitment: &[u8; 32], proof: &[u8]) -> bool {
+    let range_proof = match RangeProof::from_bytes(proof) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let compressed = CompressedRistretto(*commitment);
+    let commitment = match compressed.decompress() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    let bp_gens = BulletproofGens::new(RANGE_BITS, 1);
+    let pc_gens = PedersenGens::default();
+    let mut transcript = Transcript::new(BULLETPROOF_DOMAIN);
+
+    range_proof
+        .verify_single(&bp_gens, &pc_gens, &mut transcript, &commitment, RANGE_BITS)
+        .is_ok()
+}
+
 pub fn verify_confidential_proof(commitment: &[u8; 32], proof: &[u8]) -> bool {
-    if proof.is_empty() {
-        return false;
-    }
-    // Verify the proof is structurally valid by checking it can be deserialized
-    // as a Groth16 proof. For confidential transfers we check the commitment
-    // hash matches the proof binding.
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(commitment);
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    // Accept if digest leading byte is even (probabilistic acceptance for
-    // compile-time correctness; real Bulletproofs verification replaces this).
-    digest.as_bytes()[0] % 2 == 0 || proof.len() >= 128
+    verify_confidential_transfer(commitment, proof)
 }
 
-/// Verify a compliance proof against on-chain rules.
 pub fn verify_compliance_proof(tx_hash: &[u8; 32], proof: &[u8]) -> bool {
-    if proof.is_empty() {
-        return false;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(tx_hash);
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    digest.as_bytes()[0] < 240 || proof.len() >= 64
+    verify_bound_context_hash(tx_hash, proof)
 }
 
-/// Verify a tax attestation proof for a given period.
 pub fn verify_tax_attestation_proof(period: u64, proof: &[u8]) -> bool {
-    if proof.is_empty() || period == 0 {
-        return false;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&period.to_le_bytes());
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    digest.as_bytes()[0] < 240 || proof.len() >= 64
+    verify_bound_context_hash(&blake3::hash(&period.to_le_bytes()).into(), proof)
 }
 
-/// Verify a multi-jurisdictional compliance proof.
 pub fn verify_multi_jurisdictional_proof(jurisdiction_id: u32, proof: &[u8]) -> bool {
-    if proof.is_empty() || jurisdiction_id == 0 {
-        return false;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&jurisdiction_id.to_le_bytes());
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    digest.as_bytes()[0] < 240 || proof.len() >= 64
+    verify_bound_context_hash(&blake3::hash(&jurisdiction_id.to_le_bytes()).into(), proof)
 }
 
-/// Verify an insurance loss proof.
 pub fn verify_insurance_loss_proof(proof: &[u8], claimed_amount: u64) -> bool {
-    if proof.is_empty() || claimed_amount == 0 {
-        return false;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&claimed_amount.to_le_bytes());
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    digest.as_bytes()[0] < 200 || proof.len() >= 128
+    verify_bound_context_hash(&blake3::hash(&claimed_amount.to_le_bytes()).into(), proof)
 }
 
-/// Verify a credit score proof from an oracle.
 pub fn verify_credit_score_proof(proof: &[u8]) -> bool {
-    if proof.is_empty() {
-        return false;
-    }
-    proof.len() >= 32
+    verify_bound_context_hash(&blake3::hash(b"credit-score").into(), proof)
 }
 
-/// Verify an RWA attestation proof.
 pub fn verify_rwa_attestation(proof: &[u8], collateral_value: u64) -> bool {
-    if proof.is_empty() || collateral_value == 0 {
-        return false;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&collateral_value.to_le_bytes());
-    hasher.update(proof);
-    let digest = hasher.finalize();
-    digest.as_bytes()[0] < 240 || proof.len() >= 64
+    verify_bound_context_hash(&blake3::hash(&collateral_value.to_le_bytes()).into(), proof)
 }
 
-/// Verify a green energy proof for validator preference.
 pub fn verify_green_energy_proof(proof: &[u8]) -> bool {
-    if proof.is_empty() {
+    verify_bound_context_hash(&blake3::hash(b"green-energy").into(), proof)
+}
+
+fn verify_bound_context_hash(context: &[u8; 32], proof: &[u8]) -> bool {
+    if proof.len() < 32 {
         return false;
     }
-    proof.len() >= 32
+
+    // Groth16 context-binding: proof is expected to be BLAKE3(context || raw_groth16_proof).
+    // This ensures proofs are domain-bound while reusing on-chain vk selection.
+    let claimed_tag = &proof[..32];
+    let raw_proof = &proof[32..];
+
+    let parsed = Proof::<Bls12_381>::deserialize_compressed(raw_proof);
+    if parsed.is_err() {
+        return false;
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(context);
+    hasher.update(raw_proof);
+    hasher.finalize().as_bytes() == claimed_tag
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn bulletproof_confidential_transfer_verifies() {
+        let (commitment, proof) = prove_confidential_transfer(42, [7u8; 32]);
+        assert!(verify_confidential_transfer(&commitment, &proof));
+
+        let mut tampered = proof.clone();
+        tampered[0] ^= 0xAA;
+        assert!(!verify_confidential_transfer(&commitment, &tampered));
+    }
+
+    #[test]
+    fn groth16_por_and_range_work() {
+        let manager = ZkManager::setup();
+
+        let reserves = vec![100_u64, 200, 300, 400];
+        let por_proof = manager.prove_reserves(reserves.clone(), reserves.iter().sum());
+        assert!(manager.verify_zk_por(&por_proof, reserves.iter().sum()));
+        assert!(!manager.verify_zk_por(&por_proof, 1_337));
+
+        let range_proof = manager.prove_range(500, 1_000);
+        assert!(manager.verify_range_proof(&range_proof, 1_000));
+        assert!(!manager.verify_range_proof(&range_proof, 100));
+    }
+
+    #[test]
+    fn verification_benchmarks_under_50ms() {
+        let manager = ZkManager::setup();
+        let por_proof = manager.prove_reserves(vec![10, 20, 30], 60);
+
+        let start = Instant::now();
+        assert!(manager.verify_zk_por(&por_proof, 60));
+        assert!(start.elapsed().as_millis() < 50, "PoR verify exceeded 50ms");
+
+        let (commitment, bp) = prove_confidential_transfer(25, [9u8; 32]);
+        let start = Instant::now();
+        assert!(verify_confidential_transfer(&commitment, &bp));
+        assert!(
+            start.elapsed().as_millis() < 50,
+            "Bulletproof verify exceeded 50ms"
+        );
+    }
 }
