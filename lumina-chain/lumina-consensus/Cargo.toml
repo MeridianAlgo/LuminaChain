@@ -3,16 +3,22 @@ name = "lumina-consensus"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+malachite = []
+
 [dependencies]
 lumina-types = { path = "../lumina-types" }
 lumina-execution = { path = "../lumina-execution" }
 lumina-storage = { path = "../lumina-storage" }
+lumina-network = { path = "../lumina-network" }
 async-trait = "0.1"
 tokio = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }
 tracing = { workspace = true }
 blake3 = { workspace = true }
+anyhow = { workspace = true }
 hex = "0.4"
 
 # malachite = { workspace = true }

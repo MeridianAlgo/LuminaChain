@@ -21,6 +21,7 @@ fn main() {
         lusd_balance: 1_000_000_000,
         ljun_balance: 1_000_000_000,
         lumina_balance: 1_000_000_000,
+        commitment: None,
     });
     
     let state_arc = Arc::new(RwLock::new(state));

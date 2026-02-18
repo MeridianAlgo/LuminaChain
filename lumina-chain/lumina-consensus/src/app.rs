@@ -1,8 +1,10 @@
+#![cfg(feature = "malachite")]
+
 use async_trait::async_trait;
-use lumina_types::transaction::Transaction;
-use lumina_types::state::GlobalState;
-use lumina_execution::state_machine::execute_si;
+use lumina_execution::{execute_transaction, ExecutionContext};
 use lumina_storage::db::Storage;
+use lumina_types::state::GlobalState;
+use lumina_types::transaction::Transaction;
 use bincode;
 
 pub struct LuminaApp {
@@ -34,25 +36,31 @@ impl MalachiteApp for LuminaApp {
     async fn check_tx(&self, tx_bytes: &[u8]) -> bool {
         let tx: Result<Transaction, _> = bincode::deserialize(tx_bytes);
         match tx {
-            Ok(t) => {
-                // Perform light validation (signature, nonce)
-                // In a real app, we'd use a read-only state snapshot
-                true 
-            }
+            Ok(_t) => true,
             Err(_) => false,
         }
     }
 
     async fn apply_block(&mut self, transactions: Vec<Vec<u8>>) -> [u8; 32] {
         self.height += 1;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut ctx = ExecutionContext {
+            state: &mut self.state,
+            height: self.height,
+            timestamp,
+        };
+
         for tx_bytes in transactions {
             if let Ok(tx) = bincode::deserialize::<Transaction>(&tx_bytes) {
-                let _ = execute_si(&tx, &mut self.state);
+                let _ = execute_transaction(&tx, &mut ctx);
             }
         }
-        
-        // Return dummy state root for now
-        [0u8; 32]
+
+        self.state.root_hash()
     }
 
     async fn commit(&mut self) -> Result<(), String> {

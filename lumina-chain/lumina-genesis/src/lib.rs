@@ -23,6 +23,7 @@ pub fn create_genesis_state() -> GlobalState {
         lusd_balance: 0,
         ljun_balance: 0,
         lumina_balance: 1_000_000_000, // 1 billion gas tokens
+        commitment: None,
     });
 
     // 3. Initial Oracle
@@ -34,8 +35,12 @@ pub fn create_genesis_state() -> GlobalState {
         accounts,
         total_lusd_supply: 0,
         total_ljun_supply: 0,
+        stabilization_pool_balance: 0,
         reserve_ratio: 1.0, // 100% backed initially
         oracle_prices,
         validators,
+        circuit_breaker_active: false,
+        fair_redeem_queue: Vec::new(),
+        last_rebalance_height: 0,
     }
 }

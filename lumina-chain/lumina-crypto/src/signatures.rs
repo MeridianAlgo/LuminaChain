@@ -1,4 +1,5 @@
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+pub use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, Verifier};
 use rand::rngs::OsRng;
 use anyhow::{Result, bail};
 

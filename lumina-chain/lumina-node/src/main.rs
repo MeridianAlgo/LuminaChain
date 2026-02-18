@@ -37,6 +37,12 @@ async fn main() -> Result<()> {
                 info!("State is empty, generating Genesis block...");
                 let genesis = lumina_genesis::create_genesis_state();
                 storage.save_state(&genesis).expect("Failed to save genesis state");
+                if let Err(e) = storage.save_state_at_height(0, &genesis) {
+                    error!("Failed to save genesis snapshot: {}", e);
+                }
+                if let Err(e) = storage.save_tip(0, [0u8; 32]) {
+                    error!("Failed to initialize chain tip: {}", e);
+                }
                 genesis
             } else {
                 info!("Loaded existing state.");
@@ -57,8 +63,12 @@ async fn main() -> Result<()> {
     // Channel for incoming transactions (Network -> Consensus, API -> Consensus)
     let (tx_sender, tx_receiver) = mpsc::channel(1000);
 
+    // Channel for incoming blocks (Network -> Consensus)
+    let (block_sender, block_receiver) = mpsc::channel(256);
+
     // Handle Network Events (Blocks & Txs)
     let net_tx_sender = tx_sender.clone();
+    let net_block_sender = block_sender.clone();
     tokio::spawn(async move {
         while let Some(event) = net_event_rx.recv().await {
             match event {
@@ -71,7 +81,12 @@ async fn main() -> Result<()> {
                     }
                 },
                 lumina_network::NetworkEvent::BlockReceived(data, peer) => {
-                    info!("Received block from {}", peer);
+                    match bincode::deserialize::<lumina_types::block::Block>(&data) {
+                        Ok(block) => {
+                            let _ = net_block_sender.send(block).await;
+                        }
+                        Err(e) => error!("Failed to deserialize block from {}: {}", peer, e),
+                    }
                 }
             }
         }
@@ -82,9 +97,16 @@ async fn main() -> Result<()> {
     let consensus_storage = storage.clone();
     let consensus_net_tx = net_cmd_tx.clone();
     let consensus_tx_rx = tx_receiver;
+    let consensus_block_rx = block_receiver;
 
     tokio::spawn(async move {
-        let service = lumina_consensus::ConsensusService::new(consensus_state, consensus_storage, consensus_net_tx, consensus_tx_rx);
+        let service = lumina_consensus::ConsensusService::new(
+            consensus_state,
+            consensus_storage,
+            consensus_net_tx,
+            consensus_tx_rx,
+            consensus_block_rx,
+        );
         service.run().await;
     });
 

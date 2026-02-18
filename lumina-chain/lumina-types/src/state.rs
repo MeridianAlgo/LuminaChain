@@ -28,6 +28,13 @@ pub struct GlobalState {
     pub last_rebalance_height: u64,
 }
 
+impl GlobalState {
+    pub fn root_hash(&self) -> [u8; 32] {
+        let bytes = bincode::serialize(self).expect("state serialization");
+        *blake3::hash(&bytes).as_bytes()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RedemptionRequest {
     pub address: [u8; 32],

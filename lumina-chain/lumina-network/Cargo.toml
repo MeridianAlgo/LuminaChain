@@ -9,4 +9,4 @@ libp2p = { workspace = true, features = ["gossipsub", "noise", "tcp", "yamux", "
 tokio = { workspace = true, features = ["full"] }
 futures = "0.3"
 tracing = { workspace = true }
-anyhow = "1.0"
+anyhow = { workspace = true }

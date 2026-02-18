@@ -1,10 +1,11 @@
 use libp2p::{
-    gossipsub, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    gossipsub, noise, swarm::Config as SwarmConfig, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux, Multiaddr, PeerId, Swarm, Transport,
 };
 use libp2p::futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, error};
+use anyhow::Result;
 
 // Define the NetworkBehaviour
 #[derive(NetworkBehaviour)]
@@ -33,7 +34,7 @@ impl P2PNetwork {
     pub async fn new(
         command_receiver: mpsc::Receiver<NetworkCommand>,
         event_sender: mpsc::Sender<NetworkEvent>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(id_keys.public());
         info!("Local Peer ID: {}", peer_id);
@@ -53,11 +54,12 @@ impl P2PNetwork {
         let gossipsub = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(id_keys),
             gossipsub_config,
-        )?;
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
 
         let behaviour = LuminaBehaviour { gossipsub };
 
-        let swarm = SwarmBuilder::with_tokio_executor(tcp_transport, behaviour, peer_id).build();
+        let swarm = Swarm::new(tcp_transport, behaviour, peer_id, SwarmConfig::with_tokio_executor());
 
         Ok(Self {
             swarm,
@@ -116,7 +118,7 @@ impl P2PNetwork {
     }
 }
 
-pub async fn start_p2p() -> Result<(mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>), Box<dyn std::error::Error>> {
+pub async fn start_p2p() -> Result<(mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>)> {
     let (cmd_tx, cmd_rx) = mpsc::channel(100);
     let (event_tx, event_rx) = mpsc::channel(100);
 
