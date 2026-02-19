@@ -2812,6 +2812,7 @@ dependencies = [
  "bulletproofs",
  "curve25519-dalek-ng",
  "ed25519-dalek",
+ "lumina-zk",
  "merlin",
  "pqcrypto-dilithium",
  "pqcrypto-kyber",
@@ -2927,6 +2928,13 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "serde",
+]
+
+[[package]]
+name = "lumina-zk"
+version = "0.1.0"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]

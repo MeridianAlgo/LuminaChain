@@ -4,6 +4,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Rust](https://img.shields.io/badge/Rust-1.75+-orange)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
+![CI](https://github.com/luminachain/lumina/actions/workflows/ci.yml/badge.svg)
 
 **Lumina Chain** is a high-performance, production-grade Layer 1 blockchain specifically designed for stablecoin operations and enterprise financial applications. Built in Rust for maximum performance and security, Lumina Chain provides a robust, scalable, and secure foundation for the next generation of financial applications.
 
@@ -26,6 +27,13 @@
 - **Privacy**: Confidential transactions with zero-knowledge proofs
 - **Cross-Chain**: IBC protocol for cross-chain interoperability
 
+### Testnet Endpoints
+- **Public RPC**: `https://rpc.testnet.lumina.example`
+- **Block Explorer**: `https://explorer.testnet.lumina.example`
+- **Faucet**: `https://faucet.testnet.lumina.example` (rate-limited, captcha + allowlist)
+- **Genesis**: [`testnet/genesis.json`](testnet/genesis.json)
+- **Bootnodes**: [`testnet/bootnodes.md`](testnet/bootnodes.md)
+
 ## 📚 Documentation
 
 ### Quick Links
@@ -34,6 +42,7 @@
 - 🛠️ [Developer Guide](docs/DEVELOPER_GUIDE.md) - Setup and development guide
 - 🔧 [API Reference](docs/API_REFERENCE.md) - Complete API documentation
 - 🔒 [Security Policy](SECURITY.md) - Vulnerability reporting and disclosure
+- 🧮 [Dual-Tranche Math Spec](docs/DUAL_TRANCHE_MATH_SPEC.md) - Collateral, rebalancing, wipeout and queue rules
 - 🚀 [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) - Production deployment
 - 📖 [API Documentation](docs/API_DOCUMENTATION.md) - API usage and examples
 - 🧭 [Roadmap](ROADMAP.md) - Milestones and upcoming work

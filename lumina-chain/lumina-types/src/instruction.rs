@@ -162,6 +162,9 @@ pub enum StablecoinInstruction {
     RegisterGreenValidator {
         energy_proof: Vec<u8>,
     },
+    SubmitGreenProof {
+        energy_proof: Vec<u8>,
+    },
     UploadComplianceCircuit {
         circuit_id: u64,
         verifier_key: Vec<u8>,

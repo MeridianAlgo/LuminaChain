@@ -1,0 +1,7 @@
+[package]
+name = "lumina-zk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+blake3 = { workspace = true }

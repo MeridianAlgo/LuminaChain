@@ -6,7 +6,8 @@ edition = "2021"
 [features]
 default = []
 pq-crypto = ["dep:pqcrypto-dilithium", "dep:pqcrypto-kyber", "dep:pqcrypto-traits"]
- dilithium = ["pq-crypto"]
+post-quantum-signatures = ["pq-crypto"]
+dilithium = ["pq-crypto"]
 
 [dependencies]
 ed25519-dalek = { workspace = true, features = ["rand_core"] }
@@ -27,6 +28,7 @@ bulletproofs = { workspace = true }
 curve25519-dalek-ng = { workspace = true }
 merlin = { workspace = true }
 threshold_crypto = { workspace = true }
+lumina-zk = { path = "../lumina-zk" }
 rand_core = "0.5"
 pqcrypto-dilithium = { workspace = true, optional = true }
 pqcrypto-kyber = { workspace = true, optional = true }

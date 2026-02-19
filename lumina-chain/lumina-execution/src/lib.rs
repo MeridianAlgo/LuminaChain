@@ -3,7 +3,7 @@
 //! overflow-safe, memory-safe logic. Production-grade implementation.
 
 use anyhow::{bail, Result};
-use lumina_crypto::signatures::verify_signature;
+use lumina_crypto::signatures::PublicKey;
 use lumina_crypto::zk::{
     verify_compliance_proof, verify_confidential_proof, verify_credit_score_proof,
     verify_green_energy_proof, verify_insurance_loss_proof, verify_multi_jurisdictional_proof,
@@ -11,10 +11,14 @@ use lumina_crypto::zk::{
 };
 use lumina_types::instruction::{AssetType, StablecoinInstruction};
 use lumina_types::state::{
-    AccountState, CustodianState, GlobalState, RWAListing, RedemptionRequest, StreamState,
-    ValidatorState, YieldPosition,
+    CustodianState, GlobalState, RWAListing, RedemptionRequest, StreamState, ValidatorState,
+    YieldPosition,
 };
 use lumina_types::transaction::Transaction;
+
+mod instructions {
+    pub mod passkey;
+}
 
 /// Immutable context for deterministic execution (height + timestamp frozen per block).
 pub struct ExecutionContext<'a> {
@@ -52,11 +56,12 @@ pub fn execute_transaction(tx: &Transaction, ctx: &mut ExecutionContext) -> Resu
     let account = ctx.state.accounts.entry(tx.sender).or_default();
 
     // Check if account uses PQ signatures
-    if let Some(ref pq_key) = account.pq_pubkey {
-        lumina_crypto::signatures::verify_pq_signature(pq_key, &tx.signing_bytes(), &tx.signature)?;
-    } else {
-        verify_signature(&tx.sender, &tx.signing_bytes(), &tx.signature)?;
-    }
+    let tx_key = account
+        .pq_pubkey
+        .as_ref()
+        .map(|k| PublicKey::PostQuantum(k.clone()))
+        .unwrap_or(PublicKey::Ed25519(tx.sender));
+    tx_key.verify(&tx.signing_bytes(), &tx.signature)?;
 
     // 2. Replay protection (nonce model)
     let sender_account = ctx.state.accounts.entry(tx.sender).or_default();
@@ -111,15 +116,12 @@ pub fn execute_transactions_parallel_non_conflicting(
                 .cloned()
                 .unwrap_or_default();
 
-            if let Some(ref pq_key) = account.pq_pubkey {
-                lumina_crypto::signatures::verify_pq_signature(
-                    pq_key,
-                    &tx.signing_bytes(),
-                    &tx.signature,
-                )?;
-            } else {
-                verify_signature(&tx.sender, &tx.signing_bytes(), &tx.signature)?;
-            }
+            let tx_key = account
+                .pq_pubkey
+                .as_ref()
+                .map(|k| PublicKey::PostQuantum(k.clone()))
+                .unwrap_or(PublicKey::Ed25519(tx.sender));
+            tx_key.verify(&tx.signing_bytes(), &tx.signature)?;
 
             if account.nonce != tx.nonce {
                 bail!("Invalid nonce in parallel pre-check");
@@ -822,48 +824,8 @@ pub fn execute_si(
             new_device_key,
             guardian_signatures,
         } => {
-            let account = ctx.state.accounts.entry(*sender).or_default();
-            if account.guardians.is_empty() {
-                bail!("Account has no guardians configured");
-            }
-            // Require majority of guardians to sign the recovery
-            let threshold = (account.guardians.len() / 2) + 1;
-            if guardian_signatures.len() < threshold {
-                bail!(
-                    "Insufficient guardian signatures: need {}, got {}",
-                    threshold,
-                    guardian_signatures.len()
-                );
-            }
-
-            // Verify each guardian signature against any registered guardian.
-            // Each guardian can only contribute once.
-            let mut used_guardians = std::collections::HashSet::<[u8; 32]>::new();
-            let mut verified_count = 0usize;
-            for sig in guardian_signatures {
-                let mut matched = None;
-                for g in &account.guardians {
-                    if used_guardians.contains(g) {
-                        continue;
-                    }
-                    if verify_signature(g, new_device_key, &sig).is_ok() {
-                        matched = Some(*g);
-                        break;
-                    }
-                }
-
-                if let Some(g) = matched {
-                    used_guardians.insert(g);
-                    verified_count = verified_count.saturating_add(1);
-                }
-            }
-            if verified_count < threshold {
-                bail!("Guardian signature verification failed");
-            }
-
             let acct = ctx.state.accounts.entry(*sender).or_default();
-            acct.passkey_device_key = Some(new_device_key.clone());
-            Ok(())
+            instructions::passkey::recover_social(acct, new_device_key, guardian_signatures)
         }
 
         StablecoinInstruction::ClaimVelocityReward { epoch, tx_volume } => {
@@ -1003,6 +965,13 @@ pub fn execute_si(
             }
             if !found {
                 bail!("Sender is not a registered validator");
+            }
+            Ok(())
+        }
+
+        StablecoinInstruction::SubmitGreenProof { energy_proof } => {
+            if !verify_green_energy_proof(energy_proof) {
+                bail!("Invalid green energy proof");
             }
             Ok(())
         }

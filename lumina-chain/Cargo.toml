@@ -12,6 +12,7 @@ members = [
     "lumina-genesis",
     "lumina-oracles",
     "lumina-simulation",
+    "lumina-zk",
 ]
 resolver = "2"
 

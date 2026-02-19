@@ -4,6 +4,25 @@ use anyhow::{bail, Result};
 use ed25519_dalek::{Signature, Signer, Verifier};
 use rand::rngs::OsRng;
 
+pub mod post_quantum;
+
+#[derive(Debug, Clone)]
+pub enum PublicKey {
+    Ed25519([u8; 32]),
+    PostQuantum(Vec<u8>),
+}
+
+impl PublicKey {
+    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        match self {
+            PublicKey::Ed25519(pubkey) => verify_signature(pubkey, message, signature),
+            PublicKey::PostQuantum(pubkey) => {
+                post_quantum::verify_pq_signature(pubkey, message, signature)
+            }
+        }
+    }
+}
+
 /// Generate a new Ed25519 keypair using OS-level CSPRNG.
 pub fn generate_keypair() -> SigningKey {
     let mut csprng = OsRng;
@@ -47,9 +66,5 @@ pub fn verify_signature(
 /// This does not simulate cryptography: if `pq-crypto` is not compiled,
 /// verification fails closed.
 pub fn verify_pq_signature(pq_pubkey: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
-    if pq_pubkey.is_empty() || signature.is_empty() {
-        bail!("Empty PQ key or signature");
-    }
-
-    crate::pq::verify_dilithium_signature(pq_pubkey, message, signature)
+    post_quantum::verify_pq_signature(pq_pubkey, message, signature)
 }
