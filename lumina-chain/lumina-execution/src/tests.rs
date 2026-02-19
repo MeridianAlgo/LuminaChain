@@ -53,10 +53,11 @@ fn test_circuit_breaker_logic() {
     state.total_lusd_supply = 1_000_000;
     state.stabilization_pool_balance = 100_000;
 
+    let manager = lumina_crypto::zk::ZkManager::setup();
     let mint_si = StablecoinInstruction::MintSenior {
         amount: 1,
         collateral_amount: 1,
-        proof: vec![],
+        proof: manager.prove_reserves(vec![1], 1),
     };
 
     {
@@ -204,7 +205,12 @@ fn test_social_recovery_threshold_and_uniqueness() {
     }
 
     assert_eq!(
-        state.accounts.get(&sender).unwrap().passkey_device_key.as_ref(),
+        state
+            .accounts
+            .get(&sender)
+            .unwrap()
+            .passkey_device_key
+            .as_ref(),
         Some(&new_device_key)
     );
 
@@ -235,10 +241,11 @@ fn test_insurance_fund_mechanics() {
         timestamp: 100,
     };
 
+    let manager = lumina_crypto::zk::ZkManager::setup();
     let si = StablecoinInstruction::MintSenior {
         amount: 1000,
         collateral_amount: 1200,
-        proof: vec![],
+        proof: manager.prove_reserves(vec![1200], 1200),
     };
     assert!(execute_si(&si, &sender, &mut ctx).is_ok());
 
@@ -542,5 +549,84 @@ fn test_rwa_listing_and_pledge() {
         execute_si(&pledge, &sender, &mut ctx).unwrap();
         assert_eq!(ctx.state.accounts.get(&sender).unwrap().lusd_balance, 2500);
         assert_eq!(ctx.state.rwa_listings.get(&0).unwrap().pledged_amount, 2500);
+    }
+}
+
+#[test]
+fn test_submit_zk_por_requires_valid_proof_and_no_replay() {
+    let mut state = GlobalState::default();
+    let sender = [12u8; 32];
+    let manager = lumina_crypto::zk::ZkManager::setup();
+    let proof = manager.prove_reserves(vec![40, 60], 100);
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 1,
+            timestamp: 100,
+        };
+        let si = StablecoinInstruction::SubmitZkPoR {
+            proof: proof.clone(),
+            total_reserves: 100,
+            timestamp: 1,
+        };
+        assert!(execute_si(&si, &sender, &mut ctx).is_ok());
+    }
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 2,
+            timestamp: 200,
+        };
+        let replay = StablecoinInstruction::SubmitZkPoR {
+            proof: proof.clone(),
+            total_reserves: 100,
+            timestamp: 2,
+        };
+        assert!(execute_si(&replay, &sender, &mut ctx).is_err());
+    }
+}
+
+#[test]
+fn test_zero_slip_batch_match_blocks_duplicates_and_replay() {
+    let mut state = GlobalState::default();
+    let sender = [13u8; 32];
+
+    let orders = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 1,
+            timestamp: 100,
+        };
+        let si = StablecoinInstruction::ZeroSlipBatchMatch {
+            orders: orders.clone(),
+        };
+        assert!(execute_si(&si, &sender, &mut ctx).is_ok());
+    }
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 2,
+            timestamp: 200,
+        };
+        let replay = StablecoinInstruction::ZeroSlipBatchMatch {
+            orders: orders.clone(),
+        };
+        assert!(execute_si(&replay, &sender, &mut ctx).is_err());
+    }
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 3,
+            timestamp: 300,
+        };
+        let dup = StablecoinInstruction::ZeroSlipBatchMatch {
+            orders: vec![[9u8; 32], [9u8; 32]],
+        };
+        assert!(execute_si(&dup, &sender, &mut ctx).is_err());
     }
 }

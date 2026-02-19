@@ -1,16 +1,21 @@
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use anyhow::{Result, anyhow};
-use lumina_types::transaction::Transaction;
-use lumina_types::instruction::{StablecoinInstruction, AssetType};
-use lumina_crypto::signatures::{generate_keypair, sign};
-use reqwest::Client;
 use ed25519_dalek::SigningKey;
-use serde::{Serialize, Deserialize};
+use lumina_crypto::signatures::{generate_keypair, sign};
+use lumina_crypto::zk::ZkManager;
+use lumina_types::instruction::{AssetType, StablecoinInstruction};
+use lumina_types::transaction::Transaction;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(author, version, about = "LuminaChain CLI — Interact with the LuminaChain network")]
+#[command(
+    author,
+    version,
+    about = "LuminaChain CLI — Interact with the LuminaChain network"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -111,16 +116,24 @@ async fn main() -> Result<()> {
             let sender = kp.verifying_key().to_bytes();
 
             let instruction = match asset.to_lowercase().as_str() {
-                "senior" | "lusd" => StablecoinInstruction::MintSenior {
-                    amount: *amount,
-                    collateral_amount: amount.saturating_mul(120) / 100,
-                    proof: vec![],
-                },
+                "senior" | "lusd" => {
+                    let collateral = amount.saturating_mul(120) / 100;
+                    let zk = ZkManager::setup();
+                    StablecoinInstruction::MintSenior {
+                        amount: *amount,
+                        collateral_amount: collateral,
+                        proof: zk.prove_reserves(vec![collateral], collateral),
+                    }
+                }
                 "junior" | "ljun" => StablecoinInstruction::MintJunior {
                     amount: *amount,
                     collateral_amount: amount.saturating_mul(120) / 100,
                 },
-                _ => return Err(anyhow!("Invalid asset type. Use: senior/lusd or junior/ljun")),
+                _ => {
+                    return Err(anyhow!(
+                        "Invalid asset type. Use: senior/lusd or junior/ljun"
+                    ))
+                }
             };
 
             let mut tx = Transaction {

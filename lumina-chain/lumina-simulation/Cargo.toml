@@ -1,0 +1,12 @@
+[package]
+name = "lumina-simulation"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lumina-types = { path = "../lumina-types" }
+lumina-execution = { path = "../lumina-execution" }
+lumina-crypto = { path = "../lumina-crypto" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+rand = { workspace = true }

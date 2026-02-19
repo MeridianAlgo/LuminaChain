@@ -1,50 +1,56 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getSession, walletLogin } from "../lib/auth";
-import { loadWallet } from "../lib/wallet";
-import { bytesToHex } from "../lib/encoding";
+import { getSession } from "../lib/auth";
 
-export default function Page() {
+export default function LandingPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const wallet = loadWallet();
-    const session = getSession();
-    
-    if (!wallet) {
-      // No wallet - go to login to create/import
-      router.replace("/auth/login");
-      return;
+    if (getSession()) {
+      router.replace("/dashboard");
     }
-    
-    // Wallet exists - ensure session and go to dashboard
-    if (!session) {
-      const address = "0x" + bytesToHex(wallet.publicKey);
-      walletLogin(address, bytesToHex(wallet.publicKey));
-    }
-    
-    router.replace("/dashboard");
   }, [router]);
 
   return (
-    <div className="login-shell">
-      <div className="login-container">
-        <div className="logo" style={{ marginBottom: 20 }}>
-          <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="60" height="60">
-            <circle cx="20" cy="20" r="18" stroke="url(#grad1)" strokeWidth="2"/>
-            <path d="M12 20L18 26L28 14" stroke="url(#grad1)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-            <defs>
-              <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#7c5cff"/>
-                <stop offset="100%" stopColor="#35c27a"/>
-              </linearGradient>
-            </defs>
-          </svg>
+    <div className="landing-shell">
+      <header className="landing-nav">
+        <div className="landing-logo">Lumina</div>
+        <div className="landing-nav-links">
+          <Link href="/auth/login" className="ghost-link">Sign in</Link>
+          <Link href="/auth/signup" className="hero-cta small">Get started</Link>
         </div>
-        <p style={{ color: "var(--muted)" }}>Connecting to Lumina...</p>
-      </div>
+      </header>
+
+      <section className="landing-hero">
+        <p className="landing-pill">Stablecoin-native infrastructure</p>
+        <h1>Payments-grade stablecoin UX, with wallet-native identity.</h1>
+        <p className="landing-sub">
+          Sign in with email + password, then transact through a locally-linked self-custody wallet.
+          Built for modern teams that want speed, transparency, and control.
+        </p>
+        <div className="landing-actions">
+          <Link href="/auth/signup" className="hero-cta">Create account</Link>
+          <Link href="/auth/login" className="hero-secondary">Sign in</Link>
+        </div>
+      </section>
+
+      <section className="landing-grid">
+        <article className="landing-card">
+          <h3>1. Authenticate</h3>
+          <p>Email/password gets you into your profile session quickly.</p>
+        </article>
+        <article className="landing-card">
+          <h3>2. Wallet linked</h3>
+          <p>On sign up, a wallet is generated and bound to your account in-browser.</p>
+        </article>
+        <article className="landing-card">
+          <h3>3. Transact on-chain</h3>
+          <p>Dashboard operations use the same typed Lumina instruction flow.</p>
+        </article>
+      </section>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-use lumina_types::state::{GlobalState, AccountState, ValidatorState};
+use lumina_types::state::{AccountState, GlobalState, ValidatorState};
 use std::collections::HashMap;
 
 /// Create the genesis state for LuminaChain.
@@ -24,23 +24,26 @@ pub fn create_genesis_state() -> GlobalState {
 
     // Deployer account with initial Lumina gas tokens
     let deployer_addr = [0u8; 32];
-    accounts.insert(deployer_addr, AccountState {
-        nonce: 0,
-        lusd_balance: 0,
-        ljun_balance: 0,
-        lumina_balance: 1_000_000_000,
-        commitment: None,
-        passkey_device_key: None,
-        guardians: Vec::new(),
-        pq_pubkey: None,
-        epoch_tx_volume: 0,
-        last_reward_epoch: 0,
-        credit_score: 0,
-        active_streams: Vec::new(),
-        yield_positions: Vec::new(),
-        pending_flash_mint: 0,
-        pending_flash_collateral: 0,
-    });
+    accounts.insert(
+        deployer_addr,
+        AccountState {
+            nonce: 0,
+            lusd_balance: 0,
+            ljun_balance: 0,
+            lumina_balance: 1_000_000_000,
+            commitment: None,
+            passkey_device_key: None,
+            guardians: Vec::new(),
+            pq_pubkey: None,
+            epoch_tx_volume: 0,
+            last_reward_epoch: 0,
+            credit_score: 0,
+            active_streams: Vec::new(),
+            yield_positions: Vec::new(),
+            pending_flash_mint: 0,
+            pending_flash_collateral: 0,
+        },
+    );
 
     // Bootstrap oracle prices (fixed-point 1e6)
     let mut oracle_prices = HashMap::new();

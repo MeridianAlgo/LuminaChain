@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::instruction::StablecoinInstruction;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Transaction {

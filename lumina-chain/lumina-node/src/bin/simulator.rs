@@ -1,8 +1,8 @@
-use lumina_types::state::{GlobalState, AccountState};
-use lumina_types::instruction::{StablecoinInstruction, AssetType};
-use lumina_types::transaction::Transaction;
-use lumina_execution::{execute_transaction, ExecutionContext};
 use lumina_crypto::signatures::{generate_keypair, sign};
+use lumina_execution::{execute_transaction, ExecutionContext};
+use lumina_types::instruction::{AssetType, StablecoinInstruction};
+use lumina_types::state::{AccountState, GlobalState};
+use lumina_types::transaction::Transaction;
 use std::time::Instant;
 
 fn main() {
@@ -14,23 +14,26 @@ fn main() {
     let whale_kp = generate_keypair();
     let whale_addr = whale_kp.verifying_key().to_bytes();
 
-    state.accounts.insert(whale_addr, AccountState {
-        nonce: 0,
-        lusd_balance: 1_000_000_000,
-        ljun_balance: 1_000_000_000,
-        lumina_balance: 1_000_000_000,
-        commitment: None,
-        passkey_device_key: None,
-        guardians: Vec::new(),
-        pq_pubkey: None,
-        epoch_tx_volume: 0,
-        last_reward_epoch: 0,
-        credit_score: 0,
-        active_streams: Vec::new(),
-        yield_positions: Vec::new(),
-        pending_flash_mint: 0,
-        pending_flash_collateral: 0,
-    });
+    state.accounts.insert(
+        whale_addr,
+        AccountState {
+            nonce: 0,
+            lusd_balance: 1_000_000_000,
+            ljun_balance: 1_000_000_000,
+            lumina_balance: 1_000_000_000,
+            commitment: None,
+            passkey_device_key: None,
+            guardians: Vec::new(),
+            pq_pubkey: None,
+            epoch_tx_volume: 0,
+            last_reward_epoch: 0,
+            credit_score: 0,
+            active_streams: Vec::new(),
+            yield_positions: Vec::new(),
+            pending_flash_mint: 0,
+            pending_flash_collateral: 0,
+        },
+    );
 
     state.total_lusd_supply = 1_000_000_000;
     state.stabilization_pool_balance = 1_200_000_000;

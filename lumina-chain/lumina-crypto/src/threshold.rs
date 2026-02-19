@@ -51,7 +51,10 @@ impl ThresholdConfig {
         let mut parsed = Vec::with_capacity(shares.len());
         for (idx, bytes) in shares {
             if bytes.len() != 96 {
-                bail!("Invalid share at index {idx}: expected 96 bytes, got {}", bytes.len());
+                bail!(
+                    "Invalid share at index {idx}: expected 96 bytes, got {}",
+                    bytes.len()
+                );
             }
             let mut arr = [0u8; 96];
             arr.copy_from_slice(bytes);

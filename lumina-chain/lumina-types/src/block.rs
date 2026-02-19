@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::transaction::Transaction;
+use serde::{Deserialize, Serialize};
 
 fn hash_concat(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -43,7 +43,11 @@ impl Block {
             let mut i = 0;
             while i < level.len() {
                 let left = level[i];
-                let right = if i + 1 < level.len() { level[i + 1] } else { left };
+                let right = if i + 1 < level.len() {
+                    level[i + 1]
+                } else {
+                    left
+                };
                 next.push(hash_concat(&left, &right));
                 i += 2;
             }

@@ -387,7 +387,10 @@ mod tests {
 
         let start = Instant::now();
         assert!(manager.verify_zk_por(&por_proof, 60));
-        assert!(start.elapsed().as_millis() < 500, "PoR verify exceeded 500ms");
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "PoR verify exceeded 500ms"
+        );
 
         let (commitment, bp) = prove_confidential_transfer(25, [9u8; 32]);
         let start = Instant::now();

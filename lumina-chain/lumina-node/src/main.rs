@@ -1,9 +1,9 @@
+use anyhow::{Context, Result};
 use clap::Parser;
-use anyhow::{Result, Context};
-use tokio::signal;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
-use tracing::{info, error, Level};
+use tokio::signal;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser, Debug)]
@@ -27,7 +27,9 @@ async fn main() -> Result<()> {
     info!("Starting Lumina Node...");
 
     // 2. Init Storage
-    let storage = Arc::new(lumina_storage::db::Storage::new(&args.data_dir).context("Failed to initialize storage")?);
+    let storage = Arc::new(
+        lumina_storage::db::Storage::new(&args.data_dir).context("Failed to initialize storage")?,
+    );
     info!("Storage initialized at {}", args.data_dir);
 
     // 3. Load or Create State
@@ -36,7 +38,9 @@ async fn main() -> Result<()> {
             if s.accounts.is_empty() && s.total_lusd_supply == 0 {
                 info!("State is empty, generating Genesis block...");
                 let genesis = lumina_genesis::create_genesis_state();
-                storage.save_state(&genesis).expect("Failed to save genesis state");
+                storage
+                    .save_state(&genesis)
+                    .expect("Failed to save genesis state");
                 if let Err(e) = storage.save_state_at_height(0, &genesis) {
                     error!("Failed to save genesis snapshot: {}", e);
                 }
@@ -48,7 +52,7 @@ async fn main() -> Result<()> {
                 info!("Loaded existing state.");
                 s
             }
-        },
+        }
         Err(e) => {
             error!("Failed to load state: {}", e);
             return Err(e);
@@ -58,8 +62,10 @@ async fn main() -> Result<()> {
     let shared_state = Arc::new(RwLock::new(state));
 
     // 4. Init Network
-    let (net_cmd_tx, mut net_event_rx) = lumina_network::start_p2p().await.context("Failed to start P2P")?;
-    
+    let (net_cmd_tx, mut net_event_rx) = lumina_network::start_p2p()
+        .await
+        .context("Failed to start P2P")?;
+
     // Channel for incoming transactions (Network -> Consensus, API -> Consensus)
     let (tx_sender, tx_receiver) = mpsc::channel(1000);
 
@@ -79,7 +85,7 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => error!("Failed to deserialize tx from {}: {}", peer, e),
                     }
-                },
+                }
                 lumina_network::NetworkEvent::BlockReceived(data, peer) => {
                     match bincode::deserialize::<lumina_types::block::Block>(&data) {
                         Ok(block) => {
@@ -132,6 +138,6 @@ async fn main() -> Result<()> {
 
     info!("Node running. Press Ctrl+C to stop.");
     signal::ctrl_c().await?;
-    
+
     Ok(())
 }

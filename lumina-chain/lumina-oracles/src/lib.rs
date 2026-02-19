@@ -6,6 +6,8 @@ pub struct OracleManager {
 
 impl OracleManager {
     pub fn new() -> Self {
-        Self { reporters: Vec::new() }
+        Self {
+            reporters: Vec::new(),
+        }
     }
 }

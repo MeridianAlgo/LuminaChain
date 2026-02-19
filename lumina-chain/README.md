@@ -48,10 +48,10 @@ cargo build --release
 ./target/release/lumina-node --validator --data-dir ./data
 ```
 
-### High-Throughput Simulation
-To verify the performance of the Lumina execution engine:
+### High-Throughput Simulation (separate module)
+To validate wallet creation, simulation-money funding, PoR-backed minting, and real transfer execution in an isolated simulation crate:
 ```bash
-cargo run --release --bin simulator
+cargo run -p lumina-simulation --release -- --wallets 200 --transfers 20000 --simulation-money 50000
 ```
 
 ## 5. Security and Integrity

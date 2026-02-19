@@ -1,21 +1,22 @@
 use axum::{
-    routing::{get, post},
-    Router, Json, extract::{State, Path},
-    response::{IntoResponse, Response},
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
 };
-use lumina_types::transaction::Transaction;
+use lumina_storage::db::Storage;
 use lumina_types::block::Block;
 use lumina_types::state::GlobalState;
-use lumina_storage::db::Storage;
+use lumina_types::transaction::Transaction;
+use prometheus_client::encoding::text::encode;
+use prometheus_client::metrics::gauge::Gauge;
+use prometheus_client::registry::Registry;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
-use prometheus_client::encoding::text::encode;
-use prometheus_client::metrics::gauge::Gauge;
-use prometheus_client::registry::Registry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -29,7 +30,11 @@ pub async fn start_server(
     storage: Arc<Storage>,
     tx_sender: mpsc::Sender<Transaction>,
 ) {
-    let state = AppState { global_state, storage, tx_sender };
+    let state = AppState {
+        global_state,
+        storage,
+        tx_sender,
+    };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -112,7 +117,11 @@ async fn get_metrics(State(state): State<AppState>) -> Response {
 
     let mut health_index = Gauge::<i64>::default();
     health_index.set(as_i64_u64(guard.health_index));
-    registry.register("lumina_health_index", "Health index (0..10000)", health_index);
+    registry.register(
+        "lumina_health_index",
+        "Health index (0..10000)",
+        health_index,
+    );
 
     let mut reserve_ratio_bps = Gauge::<i64>::default();
     let rr_bps = (guard.reserve_ratio.max(0.0) * 10_000.0) as u64;
@@ -125,11 +134,19 @@ async fn get_metrics(State(state): State<AppState>) -> Response {
 
     let mut total_lusd_supply = Gauge::<i64>::default();
     total_lusd_supply.set(as_i64_u64(guard.total_lusd_supply));
-    registry.register("lumina_total_lusd_supply", "Total LUSD supply", total_lusd_supply);
+    registry.register(
+        "lumina_total_lusd_supply",
+        "Total LUSD supply",
+        total_lusd_supply,
+    );
 
     let mut total_ljun_supply = Gauge::<i64>::default();
     total_ljun_supply.set(as_i64_u64(guard.total_ljun_supply));
-    registry.register("lumina_total_ljun_supply", "Total LJUN supply", total_ljun_supply);
+    registry.register(
+        "lumina_total_ljun_supply",
+        "Total LJUN supply",
+        total_ljun_supply,
+    );
 
     let mut stabilization_pool_balance = Gauge::<i64>::default();
     stabilization_pool_balance.set(as_i64_u64(guard.stabilization_pool_balance));
@@ -160,7 +177,9 @@ async fn get_metrics(State(state): State<AppState>) -> Response {
     registry.register("lumina_validator_count", "Validator count", validator_count);
 
     let mut green_validator_count = Gauge::<i64>::default();
-    green_validator_count.set(as_i64_usize(guard.validators.iter().filter(|v| v.is_green).count()));
+    green_validator_count.set(as_i64_usize(
+        guard.validators.iter().filter(|v| v.is_green).count(),
+    ));
     registry.register(
         "lumina_green_validator_count",
         "Green validator count",
@@ -173,7 +192,11 @@ async fn get_metrics(State(state): State<AppState>) -> Response {
 
     let mut rwa_listing_count = Gauge::<i64>::default();
     rwa_listing_count.set(as_i64_usize(guard.rwa_listings.len()));
-    registry.register("lumina_rwa_listing_count", "RWA listing count", rwa_listing_count);
+    registry.register(
+        "lumina_rwa_listing_count",
+        "RWA listing count",
+        rwa_listing_count,
+    );
 
     let mut out = String::new();
     if encode(&mut out, &registry).is_err() {
@@ -188,10 +211,7 @@ async fn get_metrics(State(state): State<AppState>) -> Response {
     (headers, out).into_response()
 }
 
-async fn get_block(
-    State(state): State<AppState>,
-    Path(height): Path<u64>,
-) -> Json<Option<Block>> {
+async fn get_block(State(state): State<AppState>, Path(height): Path<u64>) -> Json<Option<Block>> {
     match state.storage.load_block_by_height(height) {
         Ok(block) => Json(block),
         Err(_) => Json(None),

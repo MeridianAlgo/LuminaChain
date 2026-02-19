@@ -7,11 +7,11 @@ use lumina_crypto::signatures::verify_signature;
 use lumina_crypto::zk::{
     verify_compliance_proof, verify_confidential_proof, verify_credit_score_proof,
     verify_green_energy_proof, verify_insurance_loss_proof, verify_multi_jurisdictional_proof,
-    verify_rwa_attestation, verify_tax_attestation_proof,
+    verify_rwa_attestation, verify_tax_attestation_proof, ZkManager,
 };
 use lumina_types::instruction::{AssetType, StablecoinInstruction};
 use lumina_types::state::{
-    AccountState, CustodianState, GlobalState, RedemptionRequest, RWAListing, StreamState,
+    AccountState, CustodianState, GlobalState, RWAListing, RedemptionRequest, StreamState,
     ValidatorState, YieldPosition,
 };
 use lumina_types::transaction::Transaction;
@@ -161,13 +161,21 @@ pub fn execute_si(
         StablecoinInstruction::MintSenior {
             amount,
             collateral_amount,
-            ..
+            proof,
         } => {
             if *amount == 0 || *collateral_amount == 0 {
                 bail!("Amount and collateral_amount must be greater than zero");
             }
+            if proof.is_empty() {
+                bail!("MintSenior requires a non-empty reserve proof");
+            }
             if ctx.state.circuit_breaker_active {
                 bail!("Circuit breaker active: senior mints paused");
+            }
+
+            let zk_manager = ZkManager::setup();
+            if !zk_manager.verify_zk_por(proof, *collateral_amount) {
+                bail!("Invalid MintSenior reserve proof");
             }
 
             // 5% mint fee goes to insurance fund
@@ -582,9 +590,28 @@ pub fn execute_si(
             Ok(())
         }
 
-        StablecoinInstruction::SubmitZkPoR { total_reserves, .. } => {
-            // Update stabilization pool from verified proof-of-reserves
+        StablecoinInstruction::SubmitZkPoR {
+            proof,
+            total_reserves,
+            timestamp,
+        } => {
+            if *timestamp <= ctx.state.last_por_timestamp {
+                bail!("PoR timestamp must be strictly increasing");
+            }
+
+            let proof_id = *blake3::hash(proof).as_bytes();
+            if ctx.state.last_por_hash == Some(proof_id) {
+                bail!("PoR proof replay detected");
+            }
+
+            let zk_manager = ZkManager::setup();
+            if !zk_manager.verify_zk_por(proof, *total_reserves) {
+                bail!("Invalid PoR proof");
+            }
+
             ctx.state.stabilization_pool_balance = *total_reserves;
+            ctx.state.last_por_timestamp = *timestamp;
+            ctx.state.last_por_hash = Some(proof_id);
             recalculate_ratios(ctx);
             Ok(())
         }
@@ -607,16 +634,30 @@ pub fn execute_si(
         }
 
         StablecoinInstruction::ZeroSlipBatchMatch { orders } => {
-            // Batch-match orders at the same price point to prevent slippage.
-            // Orders are tx hashes of pending swaps; here we validate count.
             if orders.is_empty() {
                 bail!("Empty order batch");
             }
             if orders.len() > 1000 {
                 bail!("Batch too large: max 1000 orders");
             }
-            // Matching is handled by the mempool/sequencer layer; on-chain we
-            // just record that this batch was committed.
+
+            let mut order_set = std::collections::HashSet::with_capacity(orders.len());
+            for order in orders {
+                if !order_set.insert(*order) {
+                    bail!("Duplicate order in batch");
+                }
+            }
+
+            let mut hasher = blake3::Hasher::new();
+            for order in orders {
+                hasher.update(order);
+            }
+            let batch_id = *hasher.finalize().as_bytes();
+            if ctx.state.executed_batch_matches.contains(&batch_id) {
+                bail!("Batch replay detected");
+            }
+            ctx.state.executed_batch_matches.push(batch_id);
+
             Ok(())
         }
 
@@ -1053,7 +1094,10 @@ pub fn execute_si(
             Ok(())
         }
 
-        StablecoinInstruction::InstantRedeem { amount, destination } => {
+        StablecoinInstruction::InstantRedeem {
+            amount,
+            destination,
+        } => {
             let _ = destination;
             if *amount == 0 {
                 bail!("Amount must be greater than zero");
@@ -1126,10 +1170,14 @@ pub fn execute_si(
             }
 
             // Dynamic collateral ratio (bps) based on score.
-            let required_bps = if score >= 800 { 10200 } else if score >= 750 { 10500 } else { 11000 };
-            let required_collateral = amount
-                .saturating_mul(required_bps)
-                / 10_000;
+            let required_bps = if score >= 800 {
+                10200
+            } else if score >= 750 {
+                10500
+            } else {
+                11000
+            };
+            let required_collateral = amount.saturating_mul(required_bps) / 10_000;
             if *collateral_amount < required_collateral {
                 bail!(
                     "Collateral too low for scored mint: need >= {}",
@@ -1304,7 +1352,9 @@ pub fn execute_si(
                 bail!("RWA listing not eligible as collateral");
             }
 
-            let remaining_capacity = listing.attested_value.saturating_sub(listing.pledged_amount);
+            let remaining_capacity = listing
+                .attested_value
+                .saturating_sub(listing.pledged_amount);
             if *amount_to_pledge > remaining_capacity {
                 bail!("Pledge exceeds RWA remaining collateral capacity");
             }

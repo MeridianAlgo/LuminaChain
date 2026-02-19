@@ -26,7 +26,6 @@ pub struct AccountState {
     /// Yield token positions
     pub yield_positions: Vec<YieldPosition>,
 
-
     pub pending_flash_mint: u64,
     pub pending_flash_collateral: u64,
 }
@@ -98,6 +97,13 @@ pub struct GlobalState {
     // Epoch tracking for velocity rewards
     pub current_epoch: u64,
     pub velocity_reward_pool: u64,
+
+    // Proof-of-reserves replay protection and ordering.
+    pub last_por_timestamp: u64,
+    pub last_por_hash: Option<[u8; 32]>,
+
+    // Replay protection for zero-slip batches.
+    pub executed_batch_matches: Vec<[u8; 32]>,
 }
 
 impl GlobalState {

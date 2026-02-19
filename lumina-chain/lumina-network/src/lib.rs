@@ -1,16 +1,14 @@
 use anyhow::Result;
+use libp2p::core::muxing::StreamMuxerBox;
+use libp2p::futures::StreamExt;
+use libp2p::quic;
 use libp2p::{
     gossipsub, identify, identity,
     kad::{self, store::MemoryStore},
     request_response::{self, ProtocolSupport},
     swarm::{Config as SwarmConfig, NetworkBehaviour, Swarm, SwarmEvent},
-    Transport,
-    Multiaddr,
-    PeerId,
+    Multiaddr, PeerId, Transport,
 };
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::futures::StreamExt;
-use libp2p::quic;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

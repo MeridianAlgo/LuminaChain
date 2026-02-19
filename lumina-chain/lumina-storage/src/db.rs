@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "rocksdb")]
-use rocksdb::{DB, Options};
+use rocksdb::{Options, DB};
 
 #[cfg(feature = "rocksdb")]
 pub struct Storage {
@@ -22,7 +22,8 @@ impl Storage {
     }
 
     pub fn save_state(&self, state: &GlobalState) -> Result<()> {
-        let encoded: Vec<u8> = bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
+        let encoded: Vec<u8> =
+            bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
         self.db
             .put(b"global_state", encoded)
             .map_err(|e| anyhow!("DB write error: {}", e))?;
@@ -31,7 +32,8 @@ impl Storage {
 
     pub fn save_state_at_height(&self, height: u64, state: &GlobalState) -> Result<()> {
         let key = format!("state_height_{}", height);
-        let encoded: Vec<u8> = bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
+        let encoded: Vec<u8> =
+            bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
         self.db
             .put(key.as_bytes(), encoded)
             .map_err(|e| anyhow!("DB write error: {}", e))?;
@@ -41,8 +43,8 @@ impl Storage {
     pub fn load_state(&self) -> Result<GlobalState> {
         match self.db.get(b"global_state") {
             Ok(Some(value)) => {
-                let decoded: GlobalState =
-                    bincode::deserialize(&value).map_err(|e| anyhow!("Deserialization error: {}", e))?;
+                let decoded: GlobalState = bincode::deserialize(&value)
+                    .map_err(|e| anyhow!("Deserialization error: {}", e))?;
                 Ok(decoded)
             }
             Ok(None) => Ok(GlobalState::default()),
@@ -60,7 +62,8 @@ impl Storage {
 
     pub fn save_state_by_hash(&self, block_hash: [u8; 32], state: &GlobalState) -> Result<()> {
         let key = format!("state_hash_{}", hex::encode(block_hash));
-        let encoded: Vec<u8> = bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
+        let encoded: Vec<u8> =
+            bincode::serialize(state).map_err(|e| anyhow!("Serialization error: {}", e))?;
         self.db
             .put(key.as_bytes(), encoded)
             .map_err(|e| anyhow!("DB write error: {}", e))?;
@@ -77,7 +80,8 @@ impl Storage {
 
     pub fn save_block(&self, block: &Block) -> Result<()> {
         let hash_key = format!("block_hash_{}", hex::encode(block.hash()));
-        let encoded = bincode::serialize(block).map_err(|e| anyhow!("Serialization error: {}", e))?;
+        let encoded =
+            bincode::serialize(block).map_err(|e| anyhow!("Serialization error: {}", e))?;
         self.db
             .put(hash_key.as_bytes(), &encoded)
             .map_err(|e| anyhow!("DB hash-index error: {}", e))?;
@@ -115,7 +119,12 @@ impl Storage {
         }
     }
 
-    pub fn save_block_meta(&self, block_hash: [u8; 32], height: u64, parent_hash: [u8; 32]) -> Result<()> {
+    pub fn save_block_meta(
+        &self,
+        block_hash: [u8; 32],
+        height: u64,
+        parent_hash: [u8; 32],
+    ) -> Result<()> {
         let key = format!("block_meta_{}", hex::encode(block_hash));
         let encoded = bincode::serialize(&(height, parent_hash))?;
         self.db
@@ -282,7 +291,12 @@ impl Storage {
         Ok(guard.blocks_by_hash.get(hash).cloned())
     }
 
-    pub fn save_block_meta(&self, block_hash: [u8; 32], height: u64, parent_hash: [u8; 32]) -> Result<()> {
+    pub fn save_block_meta(
+        &self,
+        block_hash: [u8; 32],
+        height: u64,
+        parent_hash: [u8; 32],
+    ) -> Result<()> {
         let mut guard = self
             .inner
             .write()

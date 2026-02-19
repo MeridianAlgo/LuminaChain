@@ -19,17 +19,17 @@ RUN mkdir -p lumina-types/src lumina-crypto/src lumina-execution/src lumina-stor
   lumina-consensus/src lumina-network/src lumina-node/src lumina-api/src lumina-cli/src \
   lumina-genesis/src lumina-oracles/src
 
-RUN printf '%s\n' 'pub fn _placeholder() {}' > lumina-types/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-crypto/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-execution/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-storage/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-consensus/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-network/src/lib.rs \
+RUN printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-types/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-crypto/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-execution/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-storage/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-consensus/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-network/src/lib.rs \
   && printf '%s\n' 'fn main() {}' > lumina-node/src/main.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-api/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-api/src/lib.rs \
   && printf '%s\n' 'fn main() {}' > lumina-cli/src/main.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-genesis/src/lib.rs \
-  && printf '%s\n' 'pub fn _placeholder() {}' > lumina-oracles/src/lib.rs
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-genesis/src/lib.rs \
+  && printf '%s\n' 'pub fn build_cache_stub() {}' > lumina-oracles/src/lib.rs
 
 RUN cargo build --release --bin lumina-node
 
