@@ -21,15 +21,11 @@ This roadmap outlines the development plan for Lumina Chain. It provides transpa
 
 ## Current Version: 2.1.0 (February 2026)
 
-### Completed Features
-- ✅ Production-grade BFT consensus
-- ✅ Dual-tranche stablecoin system
-- ✅ Zero-knowledge proof integration
-- ✅ Enterprise security features
-- ✅ Comprehensive API suite
-- ✅ Multi-cloud deployment support
-- ✅ Advanced monitoring and observability
-- ✅ Regulatory compliance features
+### Delivery Status Snapshot
+- 🟡 Consensus + core execution are live in-tree.
+- 🟡 Advanced cryptography features are partially implemented and still under hardening.
+- 🟡 Testnet operations are in-progress (public endpoints and bootstrap artifacts now tracked in `testnet/`).
+- 🔴 Phase 2/3 items are **not** considered complete until implementation + tests + public docs are all merged.
 
 ## Upcoming Releases
 

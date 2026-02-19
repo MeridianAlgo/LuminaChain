@@ -1,7 +1,7 @@
 #![cfg(feature = "malachite")]
 
 use async_trait::async_trait;
-use lumina_crypto::signatures::{verify_pq_signature, verify_signature};
+use lumina_crypto::signatures::PublicKey;
 use lumina_execution::{end_block, execute_transaction, ExecutionContext};
 use lumina_storage::db::Storage;
 use lumina_types::state::GlobalState;
@@ -123,6 +123,58 @@ impl LuminaApp {
         }
         Ok(())
     }
+
+    fn prevalidate_tx_against_state(
+        state: &GlobalState,
+        tx: &Transaction,
+        height: u64,
+        timestamp: u64,
+    ) -> Result<(), String> {
+        let mut dry_run_state = state.clone();
+        let mut dry_ctx = ExecutionContext {
+            state: &mut dry_run_state,
+            height,
+            timestamp,
+        };
+        execute_transaction(tx, &mut dry_ctx).map_err(|e| e.to_string())
+    }
+
+    fn prevalidate_inflight(&self, tx: &Transaction) -> Result<(), String> {
+        let height = self
+            .inflight
+            .as_ref()
+            .map(|b| b.height)
+            .unwrap_or(self.height + 1);
+        let timestamp = self
+            .inflight
+            .as_ref()
+            .map(|b| b.timestamp)
+            .unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default()
+            });
+
+        if let Some(inflight) = &self.inflight {
+            let mut dry_run_state = self.state.clone();
+            let mut dry_ctx = ExecutionContext {
+                state: &mut dry_run_state,
+                height,
+                timestamp,
+            };
+
+            for tx_bytes in &inflight.txs {
+                let pending_tx = bincode::deserialize::<Transaction>(tx_bytes)
+                    .map_err(|_| "invalid tx bytes in pending block".to_string())?;
+                execute_transaction(&pending_tx, &mut dry_ctx).map_err(|e| e.to_string())?;
+            }
+
+            return execute_transaction(tx, &mut dry_ctx).map_err(|e| e.to_string());
+        }
+
+        Self::prevalidate_tx_against_state(&self.state, tx, height, timestamp)
+    }
 }
 
 #[async_trait]
@@ -168,20 +220,25 @@ impl Application for LuminaApp {
             Err(_) => return false,
         };
 
+        let tx_key = self
+            .state
+            .accounts
+            .get(&tx.sender)
+            .and_then(|account| account.pq_pubkey.clone())
+            .map(PublicKey::PostQuantum)
+            .unwrap_or(PublicKey::Ed25519(tx.sender));
         let signing_bytes = tx.signing_bytes();
-        if let Some(account) = self.state.accounts.get(&tx.sender) {
-            if let Some(ref pq_key) = account.pq_pubkey {
-                return verify_pq_signature(pq_key, &signing_bytes, &tx.signature).is_ok();
-            }
+        if tx_key.verify(&signing_bytes, &tx.signature).is_err() {
+            return false;
         }
 
-        verify_signature(&tx.sender, &signing_bytes, &tx.signature).is_ok()
+        self.prevalidate_inflight(&tx).is_ok()
     }
 
     async fn deliver_tx(&mut self, req: DeliverTxRequest) -> Result<(), String> {
-        if bincode::deserialize::<Transaction>(&req.tx).is_err() {
-            return Err("invalid tx bytes".to_string());
-        }
+        let tx: Transaction = bincode::deserialize::<Transaction>(&req.tx)
+            .map_err(|_| "invalid tx bytes".to_string())?;
+        self.prevalidate_inflight(&tx)?;
         let Some(inflight) = self.inflight.as_mut() else {
             return Err("begin_block must be called first".to_string());
         };

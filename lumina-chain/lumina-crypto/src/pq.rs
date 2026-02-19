@@ -1,4 +1,7 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
+
+#[cfg(feature = "pq-crypto")]
+use anyhow::anyhow;
 
 #[cfg(feature = "pq-crypto")]
 use pqcrypto_dilithium::dilithium3;

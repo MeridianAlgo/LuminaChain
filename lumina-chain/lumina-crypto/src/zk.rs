@@ -320,7 +320,7 @@ pub fn verify_rwa_attestation(proof: &[u8], collateral_value: u64) -> bool {
 }
 
 pub fn verify_green_energy_proof(proof: &[u8]) -> bool {
-    verify_bound_context_hash(&blake3::hash(b"green-energy").into(), proof)
+    lumina_zk::circuits::green_energy::verify_green_energy_proof(proof)
 }
 
 fn verify_bound_context_hash(context: &[u8; 32], proof: &[u8]) -> bool {

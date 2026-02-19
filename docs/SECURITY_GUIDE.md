@@ -616,3 +616,22 @@ cargo build --release
 *Last Updated: February 2026*  
 *Version: 3.0.0*  
 *Confidentiality: Public*
+## Audit Plan (2026)
+
+- **Scope freeze**: `v2.2.0-rc1` branch at least 14 days before launch.
+- **Internal review**: consensus, execution, and cryptography threat-model walkthrough.
+- **External audits**:
+  1. Consensus + networking audit (firm A).
+  2. Execution + economics audit (firm B).
+  3. Cryptography + ZK audit (firm C).
+- **Remediation SLA**:
+  - Critical: 72h
+  - High: 7 days
+  - Medium: 30 days
+  - Low: next minor release
+
+## Bug Bounty
+
+- Program host: **Immunefi**
+- Program URL: `https://immunefi.com/bounty/luminachain`
+- Scope includes consensus logic, tx validation, reserve accounting, and custody workflows.
