@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Rust](https://img.shields.io/badge/Rust-1.75+-orange)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![CI](https://github.com/luminachain/lumina/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/MeridianAlgo/LuminaChain/actions/workflows/ci.yml/badge.svg)](https://github.com/MeridianAlgo/LuminaChain/actions/workflows/ci.yml)
 
 **Lumina Chain** is a high-performance, production-grade Layer 1 blockchain specifically designed for stablecoin operations and enterprise financial applications. Built in Rust for maximum performance and security, Lumina Chain provides a robust, scalable, and secure foundation for the next generation of financial applications.
 
