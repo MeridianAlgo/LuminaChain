@@ -8,6 +8,18 @@ fn new_sender() -> ([u8; 32], lumina_crypto::signatures::SigningKey) {
     (kp.verifying_key().to_bytes(), kp)
 }
 
+fn bound_proof(context: [u8; 32], raw_groth16_proof: Vec<u8>) -> Vec<u8> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&context);
+    hasher.update(&raw_groth16_proof);
+    let tag = *hasher.finalize().as_bytes();
+
+    let mut out = Vec::with_capacity(32 + raw_groth16_proof.len());
+    out.extend_from_slice(&tag);
+    out.extend_from_slice(&raw_groth16_proof);
+    out
+}
+
 #[test]
 fn test_stabilization_rebalance() {
     let mut state = GlobalState::default();
@@ -365,4 +377,170 @@ fn test_parallel_non_conflicting_transfers() {
 
     assert_eq!(ctx.state.accounts.get(&r1).unwrap().lusd_balance, 10);
     assert_eq!(ctx.state.accounts.get(&r2).unwrap().lusd_balance, 20);
+}
+
+#[test]
+fn test_flash_mint_and_flash_burn_same_block() {
+    let mut state = GlobalState::default();
+    let sender = [12u8; 32];
+
+    // Provide some base collateral so reserve ratio doesn't instantly trip circuit breaker.
+    state.stabilization_pool_balance = 1_000_000;
+    state.total_lusd_supply = 1_000_000;
+    state.reserve_ratio = 1.0;
+
+    // Flash mint
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 10,
+            timestamp: 1,
+        };
+        let si = StablecoinInstruction::FlashMint {
+            amount: 1000,
+            collateral_asset: lumina_types::instruction::AssetType::Lumina,
+            collateral_amount: 1200,
+            commitment: [9u8; 32],
+        };
+        execute_si(&si, &sender, &mut ctx).unwrap();
+        assert_eq!(ctx.state.pending_flash_mints, 1000);
+        let acct = ctx.state.accounts.get(&sender).unwrap();
+        assert_eq!(acct.pending_flash_mint, 1000);
+        assert_eq!(acct.pending_flash_collateral, 1200);
+    }
+
+    // Must burn full amount
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 10,
+            timestamp: 2,
+        };
+        let burn = StablecoinInstruction::FlashBurn { amount: 1000 };
+        execute_si(&burn, &sender, &mut ctx).unwrap();
+        assert_eq!(ctx.state.pending_flash_mints, 0);
+        let acct = ctx.state.accounts.get(&sender).unwrap();
+        assert_eq!(acct.pending_flash_mint, 0);
+        assert_eq!(acct.pending_flash_collateral, 0);
+    }
+}
+
+#[test]
+fn test_instant_redeem_queues_under_stress() {
+    let mut state = GlobalState::default();
+    let sender = [13u8; 32];
+
+    state.accounts.insert(
+        sender,
+        AccountState {
+            lusd_balance: 5000,
+            ..Default::default()
+        },
+    );
+    state.total_lusd_supply = 5000;
+    state.reserve_ratio = 0.90;
+    state.stabilization_pool_balance = 4500;
+
+    let mut ctx = ExecutionContext {
+        state: &mut state,
+        height: 1,
+        timestamp: 100,
+    };
+    let redeem = StablecoinInstruction::InstantRedeem {
+        amount: 1000,
+        destination: [0u8; 32],
+    };
+    execute_si(&redeem, &sender, &mut ctx).unwrap();
+    assert_eq!(ctx.state.fair_redeem_queue.len(), 1);
+    assert_eq!(ctx.state.accounts.get(&sender).unwrap().lusd_balance, 4000);
+}
+
+#[test]
+fn test_mint_with_credit_score_allowlist_and_replay_protection() {
+    let mut state = GlobalState::default();
+    let sender = [14u8; 32];
+    let oracle = [7u8; 32];
+    state.trusted_credit_oracles.push(oracle);
+
+    let manager = lumina_crypto::zk::ZkManager::setup();
+    let raw = manager.prove_range(500, 1000);
+    let proof = bound_proof(*blake3::hash(b"credit-score").as_bytes(), raw);
+
+    // Derive the score the execution will compute so we can set a threshold it passes.
+    let score_bytes = blake3::hash(&proof);
+    let raw_score = u16::from_le_bytes([score_bytes.as_bytes()[0], score_bytes.as_bytes()[1]]);
+    let score = 300 + (raw_score % 551);
+    let threshold = score.saturating_sub(1);
+
+    let mut ctx = ExecutionContext {
+        state: &mut state,
+        height: 1,
+        timestamp: 100,
+    };
+
+    let mint = StablecoinInstruction::MintWithCreditScore {
+        amount: 1000,
+        collateral_amount: 1200,
+        credit_score_proof: proof.clone(),
+        min_score_threshold: threshold,
+        oracle,
+    };
+    execute_si(&mint, &sender, &mut ctx).unwrap();
+    assert_eq!(ctx.state.accounts.get(&sender).unwrap().lusd_balance, 1000);
+
+    // Replaying the same proof should fall back to MintSenior (and thus charge 5% fee).
+    let mut ctx2 = ExecutionContext {
+        state: &mut state,
+        height: 2,
+        timestamp: 200,
+    };
+    execute_si(&mint, &sender, &mut ctx2).unwrap();
+    // MintSenior mints net of fee: 1000 - 50 = 950
+    assert_eq!(ctx2.state.accounts.get(&sender).unwrap().lusd_balance, 1950);
+}
+
+#[test]
+fn test_rwa_listing_and_pledge() {
+    let mut state = GlobalState::default();
+    let sender = [15u8; 32];
+
+    let manager = lumina_crypto::zk::ZkManager::setup();
+    let raw = manager.prove_range(1, 10);
+    let attested_value = 10_000u64;
+    let proof = bound_proof(*blake3::hash(&attested_value.to_le_bytes()).as_bytes(), raw);
+
+    // List RWA
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 1,
+            timestamp: 100,
+        };
+        let list = StablecoinInstruction::ListRWA {
+            asset_description: "invoice #123".to_string(),
+            attested_value,
+            attestation_proof: proof,
+            maturity_date: Some(1_000_000),
+            collateral_eligibility: true,
+        };
+        execute_si(&list, &sender, &mut ctx).unwrap();
+        assert_eq!(ctx.state.rwa_listings.len(), 1);
+        assert_eq!(ctx.state.next_rwa_id, 1);
+    }
+
+    // Pledge against it
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 2,
+            timestamp: 200,
+        };
+        let pledge = StablecoinInstruction::UseRWAAsCollateral {
+            rwa_id: 0,
+            amount_to_pledge: 2500,
+        };
+        execute_si(&pledge, &sender, &mut ctx).unwrap();
+        assert_eq!(ctx.state.accounts.get(&sender).unwrap().lusd_balance, 2500);
+        assert_eq!(ctx.state.rwa_listings.get(&0).unwrap().pledged_amount, 2500);
+    }
 }

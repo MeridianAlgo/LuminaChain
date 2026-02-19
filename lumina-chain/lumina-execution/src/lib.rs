@@ -11,8 +11,8 @@ use lumina_crypto::zk::{
 };
 use lumina_types::instruction::{AssetType, StablecoinInstruction};
 use lumina_types::state::{
-    CustodianState, GlobalState, RWAListing, RedemptionRequest, StreamState, ValidatorState,
-    YieldPosition,
+    AccountState, CustodianState, GlobalState, RedemptionRequest, RWAListing, StreamState,
+    ValidatorState, YieldPosition,
 };
 use lumina_types::transaction::Transaction;
 
@@ -961,25 +961,56 @@ pub fn execute_si(
         // ══════════════════════════════════════════════════════════
         StablecoinInstruction::FlashMint {
             amount,
-            collateral_commitment,
+            collateral_asset,
+            collateral_amount,
+            commitment,
         } => {
             if *amount == 0 {
                 bail!("Flash mint amount must be non-zero");
             }
-            if collateral_commitment.iter().all(|&b| b == 0) {
-                bail!("Invalid collateral commitment");
+            if *collateral_amount == 0 {
+                bail!("Flash mint collateral must be non-zero");
             }
-            // Flash mints must be burned within the same block
+
+            let min_collateral = amount.saturating_mul(110) / 100;
+            if *collateral_amount < min_collateral {
+                bail!(
+                    "Insufficient collateral for flash mint: need >= {}",
+                    min_collateral
+                );
+            }
+
+            // Domain-bind the collateral lock (commitment is stored off-chain/on-chain by custody
+            // subsystems; here we only enforce accounting and end-of-block burn).
+            let _ = (collateral_asset, commitment);
+
+            ctx.state.stabilization_pool_balance = ctx
+                .state
+                .stabilization_pool_balance
+                .checked_add(*collateral_amount)
+                .ok_or_else(|| anyhow::anyhow!("Collateral overflow"))?;
+
             let account = ctx.state.accounts.entry(*sender).or_default();
+            account.pending_flash_mint = account
+                .pending_flash_mint
+                .checked_add(*amount)
+                .ok_or_else(|| anyhow::anyhow!("Account flash mint overflow"))?;
+            account.pending_flash_collateral = account
+                .pending_flash_collateral
+                .checked_add(*collateral_amount)
+                .ok_or_else(|| anyhow::anyhow!("Account flash collateral overflow"))?;
+
             account.lusd_balance = account
                 .lusd_balance
                 .checked_add(*amount)
                 .ok_or_else(|| anyhow::anyhow!("Balance overflow"))?;
+
             ctx.state.total_lusd_supply = ctx
                 .state
                 .total_lusd_supply
                 .checked_add(*amount)
                 .ok_or_else(|| anyhow::anyhow!("Supply overflow"))?;
+
             ctx.state.pending_flash_mints = ctx
                 .state
                 .pending_flash_mints
@@ -993,6 +1024,12 @@ pub fn execute_si(
                 bail!("Flash burn amount must be non-zero");
             }
             let account = ctx.state.accounts.entry(*sender).or_default();
+            if account.pending_flash_mint == 0 {
+                bail!("No pending flash mint to burn");
+            }
+            if *amount != account.pending_flash_mint {
+                bail!("Flash burn must burn full pending flash mint in this block");
+            }
             if account.lusd_balance < *amount {
                 bail!("Insufficient LUSD for flash burn");
             }
@@ -1000,33 +1037,107 @@ pub fn execute_si(
             ctx.state.total_lusd_supply =
                 checked_sub_u64(ctx.state.total_lusd_supply, *amount, "LUSD supply")?;
             ctx.state.pending_flash_mints = ctx.state.pending_flash_mints.saturating_sub(*amount);
+
+            let collateral_to_release = account.pending_flash_collateral;
+            ctx.state.stabilization_pool_balance = ctx
+                .state
+                .stabilization_pool_balance
+                .saturating_sub(collateral_to_release);
+            account.pending_flash_mint = 0;
+            account.pending_flash_collateral = 0;
+            Ok(())
+        }
+
+        StablecoinInstruction::InstantRedeem { amount, destination } => {
+            let _ = destination;
+            if *amount == 0 {
+                bail!("Amount must be greater than zero");
+            }
+
+            let account = ctx.state.accounts.entry(*sender).or_default();
+            if account.lusd_balance < *amount {
+                bail!("Insufficient LUSD balance");
+            }
+
+            if ctx.state.circuit_breaker_active || ctx.state.reserve_ratio < 0.95 {
+                ctx.state.fair_redeem_queue.push(RedemptionRequest {
+                    address: *sender,
+                    amount: *amount,
+                    timestamp: ctx.timestamp,
+                });
+                let acct = ctx.state.accounts.entry(*sender).or_default();
+                acct.lusd_balance = checked_sub_u64(acct.lusd_balance, *amount, "LUSD balance")?;
+                return Ok(());
+            }
+
+            let acct = ctx.state.accounts.entry(*sender).or_default();
+            acct.lusd_balance = checked_sub_u64(acct.lusd_balance, *amount, "LUSD balance")?;
+            ctx.state.total_lusd_supply =
+                checked_sub_u64(ctx.state.total_lusd_supply, *amount, "LUSD supply")?;
+            ctx.state.stabilization_pool_balance =
+                ctx.state.stabilization_pool_balance.saturating_sub(*amount);
+
+            recalculate_ratios(ctx);
             Ok(())
         }
 
         StablecoinInstruction::MintWithCreditScore {
-            score_proof,
             amount,
-            reduced_collateral,
+            collateral_amount,
+            credit_score_proof,
+            min_score_threshold,
+            oracle,
         } => {
-            if !verify_credit_score_proof(score_proof) {
-                bail!("Invalid credit score proof");
-            }
             if *amount == 0 {
                 bail!("Amount must be non-zero");
             }
-            // Credit-scored minting allows lower collateral ratio (min 80%)
-            let min_collateral = amount.saturating_mul(80) / 100;
-            if *reduced_collateral < min_collateral {
+
+            let oracle_allowed = ctx.state.trusted_credit_oracles.contains(oracle);
+            let proof_ok = verify_credit_score_proof(credit_score_proof);
+            let proof_id = *blake3::hash(credit_score_proof).as_bytes();
+            let is_replay = ctx.state.used_credit_proofs.contains(&proof_id);
+
+            if !oracle_allowed || !proof_ok || is_replay {
+                // Fallback to normal mint semantics.
+                let fallback = StablecoinInstruction::MintSenior {
+                    amount: *amount,
+                    collateral_amount: *collateral_amount,
+                    proof: Vec::new(),
+                };
+                return execute_si(&fallback, sender, ctx);
+            }
+
+            // Deterministically derive the disclosed score from the proof bytes.
+            let score_bytes = blake3::hash(credit_score_proof);
+            let raw = u16::from_le_bytes([score_bytes.as_bytes()[0], score_bytes.as_bytes()[1]]);
+            let score = 300 + (raw % 551);
+            if score < *min_score_threshold {
+                let fallback = StablecoinInstruction::MintSenior {
+                    amount: *amount,
+                    collateral_amount: *collateral_amount,
+                    proof: Vec::new(),
+                };
+                return execute_si(&fallback, sender, ctx);
+            }
+
+            // Dynamic collateral ratio (bps) based on score.
+            let required_bps = if score >= 800 { 10200 } else if score >= 750 { 10500 } else { 11000 };
+            let required_collateral = amount
+                .saturating_mul(required_bps)
+                / 10_000;
+            if *collateral_amount < required_collateral {
                 bail!(
-                    "Collateral too low: minimum {} for credit-scored mint",
-                    min_collateral
+                    "Collateral too low for scored mint: need >= {}",
+                    required_collateral
                 );
             }
+
+            ctx.state.used_credit_proofs.push(proof_id);
 
             ctx.state.stabilization_pool_balance = ctx
                 .state
                 .stabilization_pool_balance
-                .checked_add(*reduced_collateral)
+                .checked_add(*collateral_amount)
                 .ok_or_else(|| anyhow::anyhow!("Collateral overflow"))?;
 
             let account = ctx.state.accounts.entry(*sender).or_default();
@@ -1034,11 +1145,7 @@ pub fn execute_si(
                 .lusd_balance
                 .checked_add(*amount)
                 .ok_or_else(|| anyhow::anyhow!("Balance overflow"))?;
-
-            // Deterministically derive the disclosed score from the attested proof bytes.
-            let score_bytes = blake3::hash(score_proof);
-            let raw = u16::from_le_bytes([score_bytes.as_bytes()[0], score_bytes.as_bytes()[1]]);
-            account.credit_score = 300 + (raw % 551);
+            account.credit_score = score;
 
             ctx.state.total_lusd_supply = ctx
                 .state
@@ -1133,72 +1240,91 @@ pub fn execute_si(
         }
 
         StablecoinInstruction::ListRWA {
+            asset_description,
+            attested_value,
             attestation_proof,
-            collateral_value,
-            asset_id,
+            maturity_date,
+            collateral_eligibility,
         } => {
-            if !verify_rwa_attestation(attestation_proof, *collateral_value) {
+            if asset_description.is_empty() {
+                bail!("Asset description must be non-empty");
+            }
+            if *attested_value == 0 {
+                bail!("Attested value must be non-zero");
+            }
+            if !verify_rwa_attestation(attestation_proof, *attested_value) {
                 bail!("Invalid RWA attestation proof");
             }
-            if ctx.state.rwa_listings.contains_key(asset_id) {
-                bail!("RWA asset already listed");
-            }
+
+            let rwa_id = ctx.state.next_rwa_id;
+            ctx.state.next_rwa_id = ctx
+                .state
+                .next_rwa_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("RWA id overflow"))?;
 
             ctx.state.rwa_listings.insert(
-                *asset_id,
+                rwa_id,
                 RWAListing {
                     owner: *sender,
+                    asset_description: asset_description.clone(),
                     attestation_proof: attestation_proof.clone(),
-                    collateral_value: *collateral_value,
+                    attested_value: *attested_value,
+                    maturity_date: *maturity_date,
+                    collateral_eligibility: *collateral_eligibility,
                     is_active: true,
-                    collateralized_amount: 0,
+                    pledged_amount: 0,
                 },
             );
             Ok(())
         }
 
-        StablecoinInstruction::CollateralizeRWA {
-            asset_id,
-            mint_amount,
+        StablecoinInstruction::UseRWAAsCollateral {
+            rwa_id,
+            amount_to_pledge,
         } => {
+            if *amount_to_pledge == 0 {
+                bail!("Pledge amount must be non-zero");
+            }
             let listing = ctx
                 .state
                 .rwa_listings
-                .get_mut(asset_id)
+                .get_mut(rwa_id)
                 .ok_or_else(|| anyhow::anyhow!("RWA asset not found"))?;
 
             if !listing.is_active {
                 bail!("RWA listing is not active");
             }
-
-            let remaining_capacity = listing
-                .collateral_value
-                .saturating_sub(listing.collateralized_amount);
-            if *mint_amount > remaining_capacity {
-                bail!("Mint exceeds RWA remaining collateral capacity");
+            if !listing.collateral_eligibility {
+                bail!("RWA listing not eligible as collateral");
             }
 
-            listing.collateralized_amount = listing
-                .collateralized_amount
-                .checked_add(*mint_amount)
-                .ok_or_else(|| anyhow::anyhow!("Collateral overflow"))?;
+            let remaining_capacity = listing.attested_value.saturating_sub(listing.pledged_amount);
+            if *amount_to_pledge > remaining_capacity {
+                bail!("Pledge exceeds RWA remaining collateral capacity");
+            }
+
+            listing.pledged_amount = listing
+                .pledged_amount
+                .checked_add(*amount_to_pledge)
+                .ok_or_else(|| anyhow::anyhow!("Pledge overflow"))?;
 
             let account = ctx.state.accounts.entry(*sender).or_default();
             account.lusd_balance = account
                 .lusd_balance
-                .checked_add(*mint_amount)
+                .checked_add(*amount_to_pledge)
                 .ok_or_else(|| anyhow::anyhow!("Balance overflow"))?;
 
             ctx.state.total_lusd_supply = ctx
                 .state
                 .total_lusd_supply
-                .checked_add(*mint_amount)
+                .checked_add(*amount_to_pledge)
                 .ok_or_else(|| anyhow::anyhow!("Supply overflow"))?;
 
             ctx.state.stabilization_pool_balance = ctx
                 .state
                 .stabilization_pool_balance
-                .checked_add(*mint_amount)
+                .checked_add(*amount_to_pledge)
                 .ok_or_else(|| anyhow::anyhow!("Pool overflow"))?;
 
             recalculate_ratios(ctx);

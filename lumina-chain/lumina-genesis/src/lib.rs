@@ -38,6 +38,8 @@ pub fn create_genesis_state() -> GlobalState {
         credit_score: 0,
         active_streams: Vec::new(),
         yield_positions: Vec::new(),
+        pending_flash_mint: 0,
+        pending_flash_collateral: 0,
     });
 
     // Bootstrap oracle prices (fixed-point 1e6)
@@ -62,6 +64,9 @@ pub fn create_genesis_state() -> GlobalState {
         last_reserve_rotation_height: 0,
         compliance_circuits: HashMap::new(),
         rwa_listings: HashMap::new(),
+        next_rwa_id: 0,
+        trusted_credit_oracles: Vec::new(),
+        used_credit_proofs: Vec::new(),
         next_yield_token_id: 0,
         health_index: 10000, // Perfect health at genesis
         pending_flash_mints: 0,

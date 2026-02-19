@@ -28,6 +28,8 @@ fn main() {
         credit_score: 0,
         active_streams: Vec::new(),
         yield_positions: Vec::new(),
+        pending_flash_mint: 0,
+        pending_flash_collateral: 0,
     });
 
     state.total_lusd_supply = 1_000_000_000;

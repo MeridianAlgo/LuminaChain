@@ -25,6 +25,10 @@ pub struct AccountState {
     pub active_streams: Vec<StreamState>,
     /// Yield token positions
     pub yield_positions: Vec<YieldPosition>,
+
+
+    pub pending_flash_mint: u64,
+    pub pending_flash_collateral: u64,
 }
 
 /// Streaming payment state
@@ -75,7 +79,12 @@ pub struct GlobalState {
     pub compliance_circuits: HashMap<u64, Vec<u8>>,
 
     // RWA registry
-    pub rwa_listings: HashMap<[u8; 32], RWAListing>,
+    pub rwa_listings: HashMap<u64, RWAListing>,
+    pub next_rwa_id: u64,
+
+    // Credit oracle allowlist + proof replay protection
+    pub trusted_credit_oracles: Vec<[u8; 32]>,
+    pub used_credit_proofs: Vec<[u8; 32]>,
 
     // Yield token counter
     pub next_yield_token_id: u64,
@@ -240,8 +249,11 @@ pub struct CustodianState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RWAListing {
     pub owner: [u8; 32],
+    pub asset_description: String,
     pub attestation_proof: Vec<u8>,
-    pub collateral_value: u64,
+    pub attested_value: u64,
+    pub maturity_date: Option<u64>,
+    pub collateral_eligibility: bool,
     pub is_active: bool,
-    pub collateralized_amount: u64,
+    pub pledged_amount: u64,
 }

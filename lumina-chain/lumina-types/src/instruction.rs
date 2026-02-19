@@ -1,5 +1,7 @@
 use serde::{Serialize, Deserialize};
 
+pub type ZkProof = Vec<u8>;
+
 /// All 40+ native StablecoinInstructions for LuminaChain.
 /// Each variant is a first-class on-chain operation with zero VM overhead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -74,13 +76,34 @@ pub enum StablecoinInstruction {
     // ══════════════════════════════════════════════════════════════
     // Phase 3 Differentiators: Capital Efficiency & RWA
     // ══════════════════════════════════════════════════════════════
-    FlashMint { amount: u64, collateral_commitment: [u8; 32] },
+    FlashMint {
+        amount: u64,
+        collateral_asset: AssetType,
+        collateral_amount: u64,
+        commitment: [u8; 32],
+    },
     FlashBurn { amount: u64 },
-    MintWithCreditScore { score_proof: Vec<u8>, amount: u64, reduced_collateral: u64 },
+    InstantRedeem { amount: u64, destination: [u8; 32] },
+    MintWithCreditScore {
+        amount: u64,
+        collateral_amount: u64,
+        credit_score_proof: ZkProof,
+        min_score_threshold: u16,
+        oracle: [u8; 32],
+    },
     WrapToYieldToken { amount: u64, maturity_blocks: u64 },
     UnwrapYieldToken { token_id: u64 },
-    ListRWA { attestation_proof: Vec<u8>, collateral_value: u64, asset_id: [u8; 32] },
-    CollateralizeRWA { asset_id: [u8; 32], mint_amount: u64 },
+    ListRWA {
+        asset_description: String,
+        attested_value: u64,
+        attestation_proof: ZkProof,
+        maturity_date: Option<u64>,
+        collateral_eligibility: bool,
+    },
+    UseRWAAsCollateral {
+        rwa_id: u64,
+        amount_to_pledge: u64,
+    },
     ComputeHealthIndex,
 }
 
