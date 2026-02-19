@@ -433,6 +433,84 @@ fn test_flash_mint_and_flash_burn_same_block() {
 }
 
 #[test]
+fn test_flash_burn_rejects_partial_repayment_fail_closed() {
+    let mut state = GlobalState::default();
+    let sender = [21u8; 32];
+
+    state.stabilization_pool_balance = 1_000_000;
+    state.total_lusd_supply = 1_000_000;
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 42,
+            timestamp: 1,
+        };
+        let flash = StablecoinInstruction::FlashMint {
+            amount: 1_000,
+            collateral_asset: lumina_types::instruction::AssetType::Lumina,
+            collateral_amount: 1_100,
+            commitment: [1u8; 32],
+        };
+        execute_si(&flash, &sender, &mut ctx).unwrap();
+    }
+
+    let mut ctx = ExecutionContext {
+        state: &mut state,
+        height: 42,
+        timestamp: 2,
+    };
+    let partial_burn = StablecoinInstruction::FlashBurn { amount: 999 };
+    let err = execute_si(&partial_burn, &sender, &mut ctx).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("Flash burn must burn full pending flash mint in this block"));
+}
+
+#[test]
+fn test_flash_burn_rejects_when_balance_missing_fail_closed() {
+    let mut state = GlobalState::default();
+    let sender = [22u8; 32];
+
+    state.stabilization_pool_balance = 1_000_000;
+    state.total_lusd_supply = 1_000_000;
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 7,
+            timestamp: 1,
+        };
+        let flash = StablecoinInstruction::FlashMint {
+            amount: 500,
+            collateral_asset: lumina_types::instruction::AssetType::Lumina,
+            collateral_amount: 550,
+            commitment: [2u8; 32],
+        };
+        execute_si(&flash, &sender, &mut ctx).unwrap();
+
+        // Spend 1 LUSD so the wallet can no longer close the full flash position.
+        let drain = StablecoinInstruction::Transfer {
+            to: [99u8; 32],
+            amount: 1,
+            asset: lumina_types::instruction::AssetType::LUSD,
+        };
+        execute_si(&drain, &sender, &mut ctx).unwrap();
+    }
+
+    let mut ctx = ExecutionContext {
+        state: &mut state,
+        height: 7,
+        timestamp: 2,
+    };
+    let burn = StablecoinInstruction::FlashBurn { amount: 500 };
+    let err = execute_si(&burn, &sender, &mut ctx).unwrap_err();
+
+    assert!(err.to_string().contains("Insufficient LUSD for flash burn"));
+}
+
+#[test]
 fn test_instant_redeem_queues_under_stress() {
     let mut state = GlobalState::default();
     let sender = [13u8; 32];

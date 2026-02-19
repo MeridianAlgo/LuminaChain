@@ -27,21 +27,8 @@ pub fn create_genesis_state() -> GlobalState {
     accounts.insert(
         deployer_addr,
         AccountState {
-            nonce: 0,
-            lusd_balance: 0,
-            ljun_balance: 0,
             lumina_balance: 1_000_000_000,
-            commitment: None,
-            passkey_device_key: None,
-            guardians: Vec::new(),
-            pq_pubkey: None,
-            epoch_tx_volume: 0,
-            last_reward_epoch: 0,
-            credit_score: 0,
-            active_streams: Vec::new(),
-            yield_positions: Vec::new(),
-            pending_flash_mint: 0,
-            pending_flash_collateral: 0,
+            ..Default::default()
         },
     );
 
@@ -53,27 +40,10 @@ pub fn create_genesis_state() -> GlobalState {
 
     GlobalState {
         accounts,
-        total_lusd_supply: 0,
-        total_ljun_supply: 0,
-        stabilization_pool_balance: 0,
         reserve_ratio: 1.0,
         oracle_prices,
         validators,
-        circuit_breaker_active: false,
-        fair_redeem_queue: Vec::new(),
-        last_rebalance_height: 0,
-        insurance_fund_balance: 0,
-        custodians: Vec::new(),
-        last_reserve_rotation_height: 0,
-        compliance_circuits: HashMap::new(),
-        rwa_listings: HashMap::new(),
-        next_rwa_id: 0,
-        trusted_credit_oracles: Vec::new(),
-        used_credit_proofs: Vec::new(),
-        next_yield_token_id: 0,
         health_index: 10000, // Perfect health at genesis
-        pending_flash_mints: 0,
-        current_epoch: 0,
-        velocity_reward_pool: 0,
+        ..Default::default()
     }
 }
