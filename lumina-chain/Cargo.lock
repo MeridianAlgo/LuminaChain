@@ -2895,6 +2895,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumina-simulation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "lumina-crypto",
+ "lumina-execution",
+ "lumina-types",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "lumina-storage"
 version = "0.1.0"
 dependencies = [

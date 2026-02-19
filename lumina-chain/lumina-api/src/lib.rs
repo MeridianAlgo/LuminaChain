@@ -266,6 +266,7 @@ async fn get_account(
                     "credit_score": account.credit_score,
                     "yield_positions": account.yield_positions.len(),
                     "active_streams": account.active_streams.len(),
+                    "custom_balances": account.custom_balances,
                 }));
             }
         }

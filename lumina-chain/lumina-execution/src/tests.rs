@@ -630,3 +630,67 @@ fn test_zero_slip_batch_match_blocks_duplicates_and_replay() {
         assert!(execute_si(&dup, &sender, &mut ctx).is_err());
     }
 }
+
+#[test]
+fn test_custom_asset_transfer_and_burn() {
+    let mut state = GlobalState::default();
+    let sender = [21u8; 32];
+    let receiver = [22u8; 32];
+
+    let mut sender_state = AccountState::default();
+    sender_state.custom_balances.insert("BTC".to_string(), 25);
+    state.accounts.insert(sender, sender_state);
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 1,
+            timestamp: 100,
+        };
+        let si = StablecoinInstruction::Transfer {
+            to: receiver,
+            amount: 10,
+            asset: lumina_types::instruction::AssetType::Custom("BTC".to_string()),
+        };
+        assert!(execute_si(&si, &sender, &mut ctx).is_ok());
+    }
+
+    assert_eq!(
+        state
+            .accounts
+            .get(&sender)
+            .and_then(|a| a.custom_balances.get("BTC"))
+            .copied(),
+        Some(15)
+    );
+    assert_eq!(
+        state
+            .accounts
+            .get(&receiver)
+            .and_then(|a| a.custom_balances.get("BTC"))
+            .copied(),
+        Some(10)
+    );
+
+    {
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 2,
+            timestamp: 200,
+        };
+        let burn = StablecoinInstruction::Burn {
+            amount: 5,
+            asset: lumina_types::instruction::AssetType::Custom("BTC".to_string()),
+        };
+        assert!(execute_si(&burn, &sender, &mut ctx).is_ok());
+    }
+
+    assert_eq!(
+        state
+            .accounts
+            .get(&sender)
+            .and_then(|a| a.custom_balances.get("BTC"))
+            .copied(),
+        Some(10)
+    );
+}

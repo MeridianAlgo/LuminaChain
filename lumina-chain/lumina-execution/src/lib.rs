@@ -330,10 +330,11 @@ pub fn execute_si(
                         checked_sub_u64(account.lumina_balance, *amount, "LUMINA balance")?;
                 }
                 AssetType::Custom(ticker) => {
-                    bail!(
-                        "Custom asset burn for '{}' not supported in core SI",
-                        ticker
-                    );
+                    let bal = account.custom_balances.entry(ticker.clone()).or_insert(0);
+                    if *bal < *amount {
+                        bail!("Insufficient {}", ticker);
+                    }
+                    *bal = checked_sub_u64(*bal, *amount, "Custom asset balance")?;
                 }
             }
 
@@ -405,7 +406,24 @@ pub fn execute_si(
                         .checked_add(*amount)
                         .ok_or_else(|| anyhow::anyhow!("Balance overflow"))?;
                 }
-                AssetType::Custom(_) => bail!("Custom asset transfer not supported in core SI"),
+                AssetType::Custom(ticker) => {
+                    {
+                        let sender_account = ctx.state.accounts.entry(*sender).or_default();
+                        let sender_bal = sender_account
+                            .custom_balances
+                            .entry(ticker.clone())
+                            .or_insert(0);
+                        if *sender_bal < *amount {
+                            bail!("Insufficient {}", ticker);
+                        }
+                        *sender_bal = checked_sub_u64(*sender_bal, *amount, "Sender custom asset")?;
+                    }
+                    let receiver = ctx.state.accounts.entry(*to).or_default();
+                    let recv_bal = receiver.custom_balances.entry(ticker.clone()).or_insert(0);
+                    *recv_bal = recv_bal
+                        .checked_add(*amount)
+                        .ok_or_else(|| anyhow::anyhow!("Balance overflow"))?;
+                }
             }
 
             Ok(())

@@ -136,6 +136,15 @@ export default function DashboardPage() {
     return "0x" + bytesToHex(wallet.publicKey);
   }, [wallet]);
 
+
+  const customAssetRows = useMemo(() => {
+    const balances = account?.custom_balances as Record<string, number> | undefined;
+    if (!balances || typeof balances !== "object") return [];
+    return Object.entries(balances)
+      .filter(([, amount]) => typeof amount === "number" && amount > 0)
+      .sort(([a], [b]) => a.localeCompare(b));
+  }, [account]);
+
   useEffect(() => {
     const w = loadWallet();
     if (!w) {
@@ -489,6 +498,25 @@ export default function DashboardPage() {
               value={account?.nonce ?? 0}
               tooltip="Transaction counter for your account. Increments with each transaction to prevent replay attacks."
             />
+          </div>
+
+          <div className="wallet-card" style={{ marginTop: 16 }}>
+            <div className="card-header">
+              <span className="card-label">Multi-Asset Balances</span>
+              <InfoBadge text="Wallet support for non-native crypto assets registered as custom chain assets." />
+            </div>
+            {customAssetRows.length === 0 ? (
+              <p className="muted">No custom assets yet. The simulation now supports BTC/ETH/SOL-style custom balances.</p>
+            ) : (
+              <div className="stack">
+                {customAssetRows.map(([ticker, amount]) => (
+                  <div key={ticker} className="row between">
+                    <strong>{ticker}</strong>
+                    <span>{amount}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 

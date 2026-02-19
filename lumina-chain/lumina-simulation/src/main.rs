@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use lumina_crypto::signatures::{generate_keypair, sign, SigningKey};
 use lumina_crypto::zk::ZkManager;
@@ -7,6 +7,7 @@ use lumina_types::instruction::{AssetType, StablecoinInstruction};
 use lumina_types::state::{AccountState, GlobalState};
 use lumina_types::transaction::Transaction;
 use rand::Rng;
+use std::collections::HashMap;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -21,12 +22,25 @@ struct Args {
     /// Starting simulated money airdropped to each wallet.
     #[arg(long, default_value_t = 50_000)]
     simulation_money: u64,
+    /// Comma-separated custom assets to activate in simulation.
+    #[arg(long, default_value = "BTC,ETH,SOL")]
+    custom_assets: String,
+    /// Starting balance per custom asset per wallet.
+    #[arg(long, default_value_t = 100)]
+    custom_asset_amount: u64,
 }
 
 #[derive(Clone)]
 struct SimWallet {
     keypair: SigningKey,
     address: [u8; 32],
+}
+
+fn parse_custom_assets(csv: &str) -> Vec<String> {
+    csv.split(',')
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn build_wallets(wallet_count: usize) -> Vec<SimWallet> {
@@ -58,16 +72,31 @@ fn seed_simulation_money(state: &mut GlobalState, wallets: &[SimWallet], amount:
     state.reserve_ratio = 1.25;
 }
 
+fn seed_custom_assets(
+    state: &mut GlobalState,
+    wallets: &[SimWallet],
+    custom_assets: &[String],
+    amount: u64,
+) {
+    for wallet in wallets {
+        let acct = state.accounts.entry(wallet.address).or_default();
+        for ticker in custom_assets {
+            acct.custom_balances.insert(ticker.clone(), amount);
+        }
+    }
+}
+
 fn build_transfer_tx(
     sender: &SimWallet,
     receiver: [u8; 32],
     amount: u64,
     nonce: u64,
+    asset: AssetType,
 ) -> Transaction {
     let instruction = StablecoinInstruction::Transfer {
         to: receiver,
         amount,
-        asset: AssetType::LUSD,
+        asset,
     };
 
     let mut tx = Transaction {
@@ -106,12 +135,42 @@ fn build_mint_tx(sender: &SimWallet, nonce: u64, amount: u64) -> Transaction {
     tx
 }
 
+fn build_register_asset_tx(sender: &SimWallet, nonce: u64, ticker: &str) -> Transaction {
+    let instruction = StablecoinInstruction::RegisterAsset {
+        ticker: ticker.to_string(),
+        decimals: 8,
+    };
+
+    let mut tx = Transaction {
+        sender: sender.address,
+        nonce,
+        instruction,
+        signature: vec![],
+        gas_limit: 20_000,
+        gas_price: 1,
+    };
+    tx.signature = sign(&sender.keypair, &tx.signing_bytes());
+    tx
+}
+
 fn run_simulation(args: &Args) -> Result<()> {
+    if args.wallets < 2 {
+        bail!("wallets must be at least 2");
+    }
+
+    let custom_assets = parse_custom_assets(&args.custom_assets);
+
     let mut state = GlobalState::default();
     let wallets = build_wallets(args.wallets);
     seed_simulation_money(&mut state, &wallets, args.simulation_money);
+    seed_custom_assets(
+        &mut state,
+        &wallets,
+        &custom_assets,
+        args.custom_asset_amount,
+    );
 
-    let mut nonce_book = std::collections::HashMap::<[u8; 32], u64>::new();
+    let mut nonce_book = HashMap::<[u8; 32], u64>::new();
     for wallet in &wallets {
         nonce_book.insert(wallet.address, 0);
     }
@@ -119,16 +178,30 @@ fn run_simulation(args: &Args) -> Result<()> {
     let start = Instant::now();
     let mut rng = rand::thread_rng();
 
-    // First, mint from wallet[0] to prove mint path + PoR enforcement works in simulation.
     let minter = &wallets[0];
+
+    // Register custom assets in oracle registry path.
+    for ticker in &custom_assets {
+        let nonce = *nonce_book.get(&minter.address).unwrap_or(&0);
+        let register_tx = build_register_asset_tx(minter, nonce, ticker);
+        let mut ctx = ExecutionContext {
+            state: &mut state,
+            height: 1,
+            timestamp: 1_700_000_000,
+        };
+        execute_transaction(&register_tx, &mut ctx)?;
+        nonce_book.insert(minter.address, nonce.saturating_add(1));
+    }
+
+    // Mint once to validate PoR path.
     let nonce = *nonce_book.get(&minter.address).unwrap_or(&0);
     let mint_tx = build_mint_tx(minter, nonce, 100_000);
 
     {
         let mut ctx = ExecutionContext {
             state: &mut state,
-            height: 1,
-            timestamp: 1_700_000_000,
+            height: 2,
+            timestamp: 1_700_000_001,
         };
         execute_transaction(&mint_tx, &mut ctx)?;
     }
@@ -148,11 +221,18 @@ fn run_simulation(args: &Args) -> Result<()> {
         let receiver = wallets[receiver_idx].address;
         let nonce = *nonce_book.get(&sender.address).unwrap_or(&0);
 
-        let tx = build_transfer_tx(sender, receiver, 1, nonce);
+        let asset = match rng.gen_range(0..(3 + custom_assets.len())) {
+            0 => AssetType::LUSD,
+            1 => AssetType::LJUN,
+            2 => AssetType::Lumina,
+            idx => AssetType::Custom(custom_assets[idx - 3].clone()),
+        };
+
+        let tx = build_transfer_tx(sender, receiver, 1, nonce, asset);
         let result = {
             let mut ctx = ExecutionContext {
                 state: &mut state,
-                height: 2 + i as u64,
+                height: 3 + i as u64,
                 timestamp: 1_700_000_100 + i as u64,
             };
             execute_transaction(&tx, &mut ctx)
@@ -181,6 +261,11 @@ fn run_simulation(args: &Args) -> Result<()> {
     println!(
         "Simulation money per wallet: {} LUSD",
         args.simulation_money
+    );
+    println!("Custom assets enabled: {:?}", custom_assets);
+    println!(
+        "Custom asset seed amount per wallet: {}",
+        args.custom_asset_amount
     );
     println!("Transfers attempted: {}", args.transfers);
     println!("Successful transfers: {}", success);
@@ -213,5 +298,17 @@ mod tests {
         assert_eq!(state.accounts.len(), 10);
         assert_eq!(state.total_lusd_supply, 10_000);
         assert!(state.reserve_ratio >= 1.0);
+    }
+
+    #[test]
+    fn simulation_bootstraps_custom_assets() {
+        let mut state = GlobalState::default();
+        let wallets = build_wallets(2);
+        let assets = vec!["BTC".to_string(), "ETH".to_string()];
+        seed_custom_assets(&mut state, &wallets, &assets, 42);
+
+        let first = state.accounts.get(&wallets[0].address).unwrap();
+        assert_eq!(first.custom_balances.get("BTC"), Some(&42));
+        assert_eq!(first.custom_balances.get("ETH"), Some(&42));
     }
 }

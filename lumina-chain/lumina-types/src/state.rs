@@ -8,6 +8,7 @@ pub struct AccountState {
     pub lusd_balance: u64,
     pub ljun_balance: u64,
     pub lumina_balance: u64,
+    pub custom_balances: HashMap<String, u64>,
     pub commitment: Option<[u8; 32]>,
     /// Passkey device key (65 bytes WebAuthn compressed public key)
     pub passkey_device_key: Option<Vec<u8>>,

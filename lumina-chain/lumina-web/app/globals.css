@@ -1779,3 +1779,216 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== Nexus-inspired monochrome theme overrides ===== */
+:root {
+  --bg: #04060b;
+  --panel: #0b0f17;
+  --muted: #97a0b3;
+  --text: #eef1f7;
+  --accent: #ffffff;
+  --danger: #ff6b6b;
+  --ok: #3ddc97;
+  --ring: rgba(255, 255, 255, 0.16);
+  --border: rgba(255, 255, 255, 0.12);
+}
+
+body {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px),
+    radial-gradient(1000px 500px at 50% -10%, rgba(255,255,255,0.08), transparent 65%);
+  background-size: 56px 56px, 56px 56px, auto;
+}
+
+.dashboard-shell,
+.auth-modern-shell,
+.login-shell {
+  background:
+    linear-gradient(rgba(4,6,11,0.9), rgba(4,6,11,0.92)),
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: auto, 56px 56px, 56px 56px;
+  animation: none;
+}
+
+.nexus-nav,
+.dashboard-nav {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-top: 14px;
+  background: rgba(7, 10, 16, 0.86);
+  backdrop-filter: blur(8px);
+}
+
+.landing-logo-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.landing-logo-icon,
+.brandMark {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4f4f5;
+  color: #111827;
+  border: 1px solid rgba(255,255,255,0.9);
+  font-weight: 800;
+}
+
+.landing-logo,
+.nav-title {
+  color: #f3f4f6;
+  background: none;
+  -webkit-text-fill-color: unset;
+}
+
+.ghost-link {
+  color: #c4c9d4;
+}
+
+.hero-cta,
+.nav-btn,
+.login-btn.primary,
+.deposit-btn,
+.feature-btn {
+  background: #f3f4f6;
+  color: #0b0d11;
+  border-color: rgba(255,255,255,0.85);
+  box-shadow: none;
+}
+
+.hero-secondary,
+.nav-btn.secondary,
+.login-btn.secondary {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.landing-shell {
+  max-width: 1280px;
+}
+
+.nexus-hero {
+  text-align: center;
+  max-width: 950px;
+  margin: 110px auto 50px;
+}
+
+.landing-hero h1 {
+  font-size: clamp(2.5rem, 8vw, 6.2rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.landing-sub {
+  margin: 0 auto;
+  font-size: clamp(1rem, 2vw, 1.12rem);
+}
+
+.landing-pill {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #ced4df;
+}
+
+.market-tape {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 0;
+  margin: 28px 0 0;
+}
+
+.ticker-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 10px;
+  font-size: 0.95rem;
+  border-right: 1px solid rgba(255,255,255,0.08);
+}
+
+.ticker-item:last-child { border-right: none; }
+.ticker-item em { color: #ff6b6b; font-style: normal; }
+.ticker-item strong { color: #f4f4f6; }
+.ticker-item span { color: #c8cfdb; }
+
+.headline-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  border-bottom: 1px solid var(--border);
+  padding: 48px 0;
+}
+
+.headline-card {
+  text-align: center;
+}
+
+.headline-card h3 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+}
+
+.headline-card p {
+  margin: 10px 0 6px;
+  color: #d8dde7;
+  font-size: 1.06rem;
+}
+
+.headline-card small {
+  color: var(--muted);
+}
+
+.wallet-card,
+.stat-card,
+.feature-card,
+.auth-modern-card,
+.modal-content,
+.onboarding-card,
+.preview-card,
+.landing-card {
+  border: 1px solid var(--border);
+  background: rgba(10, 14, 21, 0.82);
+  box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+}
+
+.address-display,
+.modern-input,
+.api-input,
+.feature-input,
+select {
+  background: rgba(5, 8, 13, 0.8);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.info-badge,
+.info-icon,
+.input-info {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.22);
+}
+
+.muted { color: var(--muted); }
+.stack { display: grid; gap: 8px; }
+.between { justify-content: space-between; }
+
+@media (max-width: 1000px) {
+  .market-tape {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .headline-stats {
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+}

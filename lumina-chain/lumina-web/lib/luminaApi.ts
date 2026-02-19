@@ -50,7 +50,8 @@ export async function getAccount(apiBase: string, addressHex: string) {
       has_pq: false,
       credit_score: 0,
       yield_positions: 0,
-      active_streams: 0
+      active_streams: 0,
+      custom_balances: {}
     };
   }
   return out;
