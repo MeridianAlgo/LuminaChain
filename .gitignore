@@ -268,7 +268,7 @@ packer_cache/
 .travis.yml
 .gitlab-ci.yml
 .jenkins/
-.github/workflows/*.yml
+
 
 # EditorConfig
 .editorconfig

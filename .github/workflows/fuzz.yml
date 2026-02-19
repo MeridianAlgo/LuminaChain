@@ -1,0 +1,32 @@
+name: Fuzz
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Build fuzz targets
+        run: cargo fuzz build
+        working-directory: ./lumina-chain/fuzz
+
+      - name: Run fuzz targets (short)
+        run: |
+          cargo fuzz run fuzz_execute_si -- -max_total_time=30
+          cargo fuzz run fuzz_transfer -- -max_total_time=30
+          cargo fuzz run fuzz_flashmint -- -max_total_time=30
+          cargo fuzz run fuzz_flashburn -- -max_total_time=30
+          cargo fuzz run fuzz_instant_redeem -- -max_total_time=30
+        working-directory: ./lumina-chain/fuzz

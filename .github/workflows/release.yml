@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build lumina-node
+        run: cargo build --release --bin lumina-node
+        working-directory: ./lumina-chain
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp ./lumina-chain/target/release/lumina-node ./dist/lumina-node
+          tar -czf lumina-node-${{ runner.os }}-${{ github.ref_name }}.tar.gz -C dist lumina-node
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item .\lumina-chain\target\release\lumina-node.exe .\dist\lumina-node.exe
+          Compress-Archive -Path .\dist\lumina-node.exe -DestinationPath lumina-node-Windows-${{ github.ref_name }}.zip
+
+      - name: Upload release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            lumina-node-*.tar.gz
+            lumina-node-*.zip
