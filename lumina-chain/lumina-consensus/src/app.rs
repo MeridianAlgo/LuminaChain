@@ -1,7 +1,7 @@
 #![cfg(feature = "malachite")]
 
 use async_trait::async_trait;
-use lumina_execution::{execute_transaction, ExecutionContext};
+use lumina_execution::{end_block, execute_transaction, ExecutionContext};
 use lumina_crypto::signatures::{verify_pq_signature, verify_signature};
 use lumina_storage::db::Storage;
 use lumina_types::state::GlobalState;
@@ -215,6 +215,8 @@ impl Application for LuminaApp {
             let tx: Transaction = bincode::deserialize(&tx_bytes).map_err(|e| e.to_string())?;
             execute_transaction(&tx, &mut ctx).map_err(|e| e.to_string())?;
         }
+
+        end_block(&mut ctx);
 
         self.height = inflight.height;
         let app_hash = self.state.root_hash();

@@ -16,3 +16,4 @@ tracing = { workspace = true }
 hex = { workspace = true }
 bincode = { workspace = true }
 tower-http = { version = "0.5", features = ["cors"] }
+prometheus-client = "0.22"

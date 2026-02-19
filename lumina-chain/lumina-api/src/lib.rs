@@ -1,6 +1,8 @@
 use axum::{
     routing::{get, post},
     Router, Json, extract::{State, Path},
+    response::{IntoResponse, Response},
+    http::{HeaderMap, HeaderValue, StatusCode},
 };
 use lumina_types::transaction::Transaction;
 use lumina_types::block::Block;
@@ -11,6 +13,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
+use prometheus_client::encoding::text::encode;
+use prometheus_client::metrics::gauge::Gauge;
+use prometheus_client::registry::Registry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,6 +40,7 @@ pub async fn start_server(
         .route("/", get(root))
         .route("/state", get(get_state))
         .route("/health", get(get_health))
+        .route("/metrics", get(get_metrics))
         .route("/tx/signing_bytes", post(tx_signing_bytes))
         .route("/tx", post(submit_tx))
         .route("/block/{height}", get(get_block))
@@ -89,6 +95,97 @@ async fn get_health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "total_validator_count": guard.validators.len(),
     });
     Json(health)
+}
+
+async fn get_metrics(State(state): State<AppState>) -> Response {
+    let guard = state.global_state.read().await;
+
+    let mut registry = Registry::default();
+
+    fn as_i64_u64(v: u64) -> i64 {
+        i64::try_from(v).unwrap_or(i64::MAX)
+    }
+
+    fn as_i64_usize(v: usize) -> i64 {
+        i64::try_from(v).unwrap_or(i64::MAX)
+    }
+
+    let mut health_index = Gauge::<i64>::default();
+    health_index.set(as_i64_u64(guard.health_index));
+    registry.register("lumina_health_index", "Health index (0..10000)", health_index);
+
+    let mut reserve_ratio_bps = Gauge::<i64>::default();
+    let rr_bps = (guard.reserve_ratio.max(0.0) * 10_000.0) as u64;
+    reserve_ratio_bps.set(as_i64_u64(rr_bps));
+    registry.register(
+        "lumina_reserve_ratio_bps",
+        "Reserve ratio in basis points (reserve_ratio * 10000)",
+        reserve_ratio_bps,
+    );
+
+    let mut total_lusd_supply = Gauge::<i64>::default();
+    total_lusd_supply.set(as_i64_u64(guard.total_lusd_supply));
+    registry.register("lumina_total_lusd_supply", "Total LUSD supply", total_lusd_supply);
+
+    let mut total_ljun_supply = Gauge::<i64>::default();
+    total_ljun_supply.set(as_i64_u64(guard.total_ljun_supply));
+    registry.register("lumina_total_ljun_supply", "Total LJUN supply", total_ljun_supply);
+
+    let mut stabilization_pool_balance = Gauge::<i64>::default();
+    stabilization_pool_balance.set(as_i64_u64(guard.stabilization_pool_balance));
+    registry.register(
+        "lumina_stabilization_pool_balance",
+        "Stabilization pool balance",
+        stabilization_pool_balance,
+    );
+
+    let mut insurance_fund_balance = Gauge::<i64>::default();
+    insurance_fund_balance.set(as_i64_u64(guard.insurance_fund_balance));
+    registry.register(
+        "lumina_insurance_fund_balance",
+        "Insurance fund balance",
+        insurance_fund_balance,
+    );
+
+    let mut circuit_breaker_active = Gauge::<i64>::default();
+    circuit_breaker_active.set(if guard.circuit_breaker_active { 1 } else { 0 });
+    registry.register(
+        "lumina_circuit_breaker_active",
+        "Circuit breaker active (1/0)",
+        circuit_breaker_active,
+    );
+
+    let mut validator_count = Gauge::<i64>::default();
+    validator_count.set(as_i64_usize(guard.validators.len()));
+    registry.register("lumina_validator_count", "Validator count", validator_count);
+
+    let mut green_validator_count = Gauge::<i64>::default();
+    green_validator_count.set(as_i64_usize(guard.validators.iter().filter(|v| v.is_green).count()));
+    registry.register(
+        "lumina_green_validator_count",
+        "Green validator count",
+        green_validator_count,
+    );
+
+    let mut account_count = Gauge::<i64>::default();
+    account_count.set(as_i64_usize(guard.accounts.len()));
+    registry.register("lumina_account_count", "Account count", account_count);
+
+    let mut rwa_listing_count = Gauge::<i64>::default();
+    rwa_listing_count.set(as_i64_usize(guard.rwa_listings.len()));
+    registry.register("lumina_rwa_listing_count", "RWA listing count", rwa_listing_count);
+
+    let mut out = String::new();
+    if encode(&mut out, &registry).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4"),
+    );
+    (headers, out).into_response()
 }
 
 async fn get_block(

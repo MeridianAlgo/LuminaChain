@@ -9,6 +9,7 @@ import { faucet, getAccount, getHealth, getState, submitInstruction } from "../.
 import type { AssetType, StablecoinInstruction, TxReceipt, Wallet } from "../../lib/types";
 
 const DEFAULT_API = process.env.NEXT_PUBLIC_LUMINA_API ?? "http://localhost:3000";
+const API_BASE_KEY = "lumina_api_base_v1";
 
 // Tooltip component for hover explanations
 function Tooltip({ children, text }: { children: React.ReactNode; text: string }) {
@@ -115,6 +116,7 @@ function LabeledInput({
 export default function DashboardPage() {
   const router = useRouter();
   const [apiBase, setApiBase] = useState(DEFAULT_API);
+  const [apiInitDone, setApiInitDone] = useState(false);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [stateSummary, setStateSummary] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
@@ -123,6 +125,11 @@ export default function DashboardPage() {
   const [busy, setBusy] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState(10000);
+  const [apiStatus, setApiStatus] = useState<
+    | { ok: true }
+    | { ok: false; message: string }
+    | null
+  >(null);
 
   const addressHex = useMemo(() => {
     if (!wallet) return null;
@@ -138,9 +145,73 @@ export default function DashboardPage() {
     setWallet(w);
   }, [router]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(API_BASE_KEY);
+    if (saved && saved.trim().length > 0) setApiBase(saved);
+  }, []);
+
+  function setApiBasePersist(next: string) {
+    setApiBase(next);
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(API_BASE_KEY, next);
+  }
+
+  async function probeApiBase(base: string): Promise<{ ok: true } | { ok: false; message: string }> {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 1200);
+      const res = await fetch(`${base.replace(/\/$/, "")}/health`, { signal: controller.signal });
+      clearTimeout(t);
+      if (!res.ok) {
+        return { ok: false, message: `HTTP ${res.status} from ${base}/health` };
+      }
+      return { ok: true };
+    } catch (e: any) {
+      const raw = e?.message ?? String(e);
+      return { ok: false, message: raw };
+    }
+  }
+
+  async function autoDiscoverApiBase() {
+    const candidates = [
+      apiBase,
+      DEFAULT_API,
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ]
+      .filter(Boolean)
+      .map((x) => String(x).trim())
+      .filter((x) => x.length > 0)
+      .map((x) => x.replace(/\/$/, ""));
+
+    const unique = Array.from(new Set(candidates));
+    for (const base of unique) {
+      const r = await probeApiBase(base);
+      if (r.ok) {
+        if (base !== apiBase) setApiBasePersist(base);
+        setApiStatus({ ok: true });
+        return;
+      }
+    }
+  }
+
+  function normalizeFetchError(e: any): string {
+    const raw = e?.message ?? String(e);
+    const lower = String(raw).toLowerCase();
+    if (lower.includes("failed to fetch") || lower.includes("err_connection_refused")) {
+      return `Cannot reach Lumina API at ${apiBase}. Make sure \"lumina-api\" is running on that URL/port (default http://localhost:3000).`;
+    }
+    if (lower.includes("404") && (lower.includes("/state") || lower.includes("/health"))) {
+      return `Got 404 calling Lumina API endpoints at ${apiBase}. This usually means you're pointing at the Next.js web server (often http://localhost:3001) instead of lumina-api (default http://localhost:3000).`;
+    }
+    return raw;
+  }
+
   async function refresh() {
     try {
       setToast(null);
+      setApiStatus(null);
       const [s, h] = await Promise.all([getState(apiBase), getHealth(apiBase)]);
       setStateSummary(s);
       setHealth(h);
@@ -148,15 +219,28 @@ export default function DashboardPage() {
         const acct = await getAccount(apiBase, addressHex);
         setAccount(acct);
       }
+      setApiStatus({ ok: true });
     } catch (e: any) {
-      setToast({ kind: "err", msg: e?.message ?? String(e) });
+      const msg = normalizeFetchError(e);
+      setApiStatus({ ok: false, message: msg });
+      setToast({ kind: "err", msg });
     }
   }
 
   useEffect(() => {
+    if (!apiInitDone) return;
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase, addressHex]);
+  }, [apiBase, addressHex, apiInitDone]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (async () => {
+      await autoDiscoverApiBase();
+      setApiInitDone(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function doLogout() {
     logout();
@@ -173,6 +257,10 @@ export default function DashboardPage() {
   async function doDeposit() {
     if (!addressHex) {
       setToast({ kind: "err", msg: "No wallet loaded." });
+      return;
+    }
+    if (apiStatus && apiStatus.ok === false) {
+      setToast({ kind: "err", msg: apiStatus.message });
       return;
     }
     setBusy(true);
@@ -192,6 +280,11 @@ export default function DashboardPage() {
   async function send(si: StablecoinInstruction): Promise<TxReceipt | null> {
     if (!wallet) {
       setToast({ kind: "err", msg: "Create/import a wallet first." });
+      return null;
+    }
+
+    if (apiStatus && apiStatus.ok === false) {
+      setToast({ kind: "err", msg: apiStatus.message });
       return null;
     }
 
@@ -276,6 +369,58 @@ export default function DashboardPage() {
       </nav>
 
       <main className="dashboard-main">
+        {/* Connection */}
+        <section className="wallet-section">
+          <div className="wallet-header">
+            <h2 className="section-title">
+              Connection
+              <InfoBadge text="Point the UI at your running lumina-api. If you see connection refused, start the API or change the URL." />
+            </h2>
+          </div>
+
+          <div className="wallet-grid" style={{ gridTemplateColumns: "2fr 1fr" }}>
+            <div className="wallet-card">
+              <div className="card-header">
+                <span className="card-label">API Base URL</span>
+                <InfoBadge text="Default is http://localhost:3000 (lumina-api). If your API runs elsewhere, change it here." />
+              </div>
+              <input
+                className="modern-input"
+                value={apiBase}
+                onChange={(e) => setApiBasePersist(e.target.value)}
+                placeholder="http://localhost:3000"
+              />
+              <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <Tooltip text="Re-check /state and /health using the API Base URL">
+                  <button className="nav-btn" onClick={refresh} disabled={busy}>
+                    Test connection
+                  </button>
+                </Tooltip>
+                <Tooltip text="Clear wallet and go back to login">
+                  <button className="nav-btn secondary" onClick={doClearWallet} disabled={busy}>
+                    Clear wallet
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-header">
+                <span className="stat-label">API Status</span>
+                <InfoBadge text="Shows whether the UI can reach the API. If offline, start lumina-api and click Test connection." />
+              </div>
+              <div className="stat-value">
+                {apiStatus?.ok === true ? "Online" : apiStatus?.ok === false ? "Offline" : "—"}
+              </div>
+              {apiStatus?.ok === false ? (
+                <div className="p" style={{ marginTop: 8 }}>
+                  {apiStatus.message}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
         {/* Wallet Overview Section */}
         <section className="wallet-section">
           <div className="wallet-header">

@@ -1,0 +1,36 @@
+[package]
+name = "lumina-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+lumina-execution = { path = "../lumina-execution" }
+lumina-types = { path = "../lumina-types" }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "fuzz_execute_si"
+path = "fuzz_targets/fuzz_execute_si.rs"
+
+[[bin]]
+name = "fuzz_transfer"
+path = "fuzz_targets/fuzz_transfer.rs"
+
+[[bin]]
+name = "fuzz_flashmint"
+path = "fuzz_targets/fuzz_flashmint.rs"
+
+[[bin]]
+name = "fuzz_flashburn"
+path = "fuzz_targets/fuzz_flashburn.rs"
+
+[[bin]]
+name = "fuzz_instant_redeem"
+path = "fuzz_targets/fuzz_instant_redeem.rs"

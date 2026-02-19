@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "lumina-validator.fullname" . }}
+  labels:
+    app: {{ include "lumina-validator.fullname" . }}
+spec:
+  serviceName: {{ include "lumina-validator.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "lumina-validator.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "lumina-validator.fullname" . }}
+    spec:
+      containers:
+        - name: lumina-node
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+{{- range .Values.args }}
+            - {{ . | quote }}
+{{- end }}
+          env:
+{{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+{{- end }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.service.apiPort }}
+              protocol: TCP
+            - name: p2p
+              containerPort: {{ .Values.service.p2pPort }}
+              protocol: UDP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 20
+  volumeClaimTemplates:
+{{- if .Values.persistence.enabled }}
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+{{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+{{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+{{- end }}

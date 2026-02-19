@@ -292,9 +292,15 @@ pub async fn start_p2p() -> Result<(mpsc::Sender<NetworkCommand>, mpsc::Receiver
     let (event_tx, event_rx) = mpsc::channel(100);
 
     let mut network = P2PNetwork::new(cmd_rx, event_tx).await?;
+
+    let port: u16 = std::env::var("LUMINA_P2P_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4000);
+
     network
         .swarm
-        .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
+        .listen_on(format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse()?)?;
 
     if let Ok(bootstrap) = std::env::var("LUMINA_BOOTSTRAP_PEERS") {
         for addr in bootstrap.split(',').filter(|s| !s.trim().is_empty()) {

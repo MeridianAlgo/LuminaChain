@@ -1,0 +1,26 @@
+replicaCount: 1
+
+image:
+  repository: lumina-chain
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  apiPort: 3000
+  p2pPort: 4000
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+
+env:
+  LUMINA_P2P_PORT: "4000"
+  LUMINA_BOOTSTRAP_PEERS: ""
+
+args:
+  - "--validator"
+  - "--data-dir"
+  - "/data"

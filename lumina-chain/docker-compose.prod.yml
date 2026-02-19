@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  lumina-node:
+    image: lumina-chain:latest
+    build: .
+    command: ["--validator", "--data-dir", "/data"]
+    environment:
+      - LUMINA_P2P_PORT=4000
+      # Comma-separated libp2p multiaddrs, e.g. /ip4/1.2.3.4/udp/4000/quic-v1
+      - LUMINA_BOOTSTRAP_PEERS=
+    volumes:
+      - lumina-data:/data
+    ports:
+      - "3000:3000" # API (HTTP)
+      - "4000:4000/udp" # P2P (QUIC)
+    restart: unless-stopped
+
+volumes:
+  lumina-data:

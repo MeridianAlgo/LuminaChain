@@ -23,6 +23,11 @@ pub struct ExecutionContext<'a> {
     pub timestamp: u64,
 }
 
+pub fn end_block(ctx: &mut ExecutionContext) {
+    compute_health_index(ctx);
+    ctx.state.pending_flash_mints = 0;
+}
+
 fn checked_add_u64(lhs: u64, rhs: u64, ctx: &str) -> Result<u64> {
     lhs.checked_add(rhs)
         .ok_or_else(|| anyhow::anyhow!("{} overflow", ctx))

@@ -31,9 +31,11 @@
 - 🏗️ [Architecture Overview](docs/ARCHITECTURE.md) - System architecture and design
 - 🛠️ [Developer Guide](docs/DEVELOPER_GUIDE.md) - Setup and development guide
 - 🔧 [API Reference](docs/API_REFERENCE.md) - Complete API documentation
-- 🔒 [Security Guide](docs/SECURITY_GUIDE.md) - Security best practices
+- 🔒 [Security Policy](SECURITY.md) - Vulnerability reporting and disclosure
 - 🚀 [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) - Production deployment
 - 📖 [API Documentation](docs/API_DOCUMENTATION.md) - API usage and examples
+- 🧭 [Roadmap](ROADMAP.md) - Milestones and upcoming work
+- 🤝 [Contributing](CONTRIBUTING.md) - How to contribute
 
 ### Quick Start
 
@@ -245,7 +247,7 @@ scrape_configs:
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](docs/CONTRIBUTING.md) for details.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ### Development Workflow
 1. Fork the repository

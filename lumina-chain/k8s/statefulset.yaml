@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: lumina-node
+  namespace: lumina
+spec:
+  serviceName: lumina-node
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lumina-node
+  template:
+    metadata:
+      labels:
+        app: lumina-node
+    spec:
+      containers:
+        - name: lumina-node
+          image: lumina-chain:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--validator", "--data-dir", "/data"]
+          env:
+            - name: LUMINA_P2P_PORT
+              value: "4000"
+            - name: LUMINA_BOOTSTRAP_PEERS
+              value: ""
+          ports:
+            - containerPort: 3000
+              name: api
+              protocol: TCP
+            - containerPort: 4000
+              name: p2p
+              protocol: UDP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
